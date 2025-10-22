@@ -17,11 +17,7 @@
 
 
 
-/*Macros for dates and disease*/
-
-	/*update these*/
-%let mindate = 01Jan2025; /*Minimum date you want to view (usually start of the year for monthly graphs). We also use this for the year max to make sure we're displaying non-complete data for the most recent year*/
-%let maxmonth = 01Sep2025;/*Same as above but most recent month 1-denorm table month*/
+/*Libnames*/
 
 %let datapath = C:\Users\mhoskins1\Desktop\Work Files\Medicaid Data Request\Medicare pt D analysis\Data\;
 %let outpath = C:\Users\mhoskins1\Desktop\Work Files\Medicaid Data Request\Medicare pt D analysis\Output\;
@@ -32,7 +28,7 @@ libname analysis 'C:\Users\mhoskins1\Desktop\Work Files\Medicaid Data Request\Me
 
 
 /*SKP THIS UNLESS PULLING IN NEW DATA; GO TO 'START HERE'*/
-
+/*Macro for import*/
 /*Import all datasets: macro because lazy*/
 %macro import  (year=,);
 proc import datafile="&datapath.Medicare_Part_D_Prescribers_by_Provider_&year..csv"
@@ -618,3 +614,4 @@ var type_new p90
 run;
 
 ods rtf close;
+
