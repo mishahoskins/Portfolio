@@ -9,15 +9,18 @@
  *
  * Inputs:       C:\Users\mhoskins1\Desktop\Work Files\Medicaid Data Request\Medicare pt D analysis\Data all data grouped by year.
  * Output:       
- * Notes:        Skillsets:
- *					Full ETL pipeline from raw data extract, transformations, to loading a useable dataset. Outputs in a clear manner. Macros, SQL. 
+ * Notes:        
  *					
  *------------------------------------------------------------------------------
  */
 
 
 
-/*Libnames*/
+/*Macros for dates and disease*/
+
+	/*update these*/
+%let mindate = 01Jan2025; /*Minimum date you want to view (usually start of the year for monthly graphs). We also use this for the year max to make sure we're displaying non-complete data for the most recent year*/
+%let maxmonth = 01Sep2025;/*Same as above but most recent month 1-denorm table month*/
 
 %let datapath = C:\Users\mhoskins1\Desktop\Work Files\Medicaid Data Request\Medicare pt D analysis\Data\;
 %let outpath = C:\Users\mhoskins1\Desktop\Work Files\Medicaid Data Request\Medicare pt D analysis\Output\;
@@ -28,7 +31,7 @@ libname analysis 'C:\Users\mhoskins1\Desktop\Work Files\Medicaid Data Request\Me
 
 
 /*SKP THIS UNLESS PULLING IN NEW DATA; GO TO 'START HERE'*/
-/*Macro for import*/
+
 /*Import all datasets: macro because lazy*/
 %macro import  (year=,);
 proc import datafile="&datapath.Medicare_Part_D_Prescribers_by_Provider_&year..csv"
@@ -142,6 +145,8 @@ select
 	else "" end as type_new
 
 from analysis.medD_2018_2023
+	/*optional year statement
+	where year_var in (2023)*/
 ;
 quit;
 
@@ -155,7 +160,8 @@ run;
 proc univariate data=medD_prep noprint;
 	var abx_tot_clms;
 	by year_var;
-	output out=medD_prep_1 p90=p90 median=median mean=mean;
+	output out=medD_prep_1 p90=p90 p10=p10 median=median mean=mean;
+		where abx_tot_clms ge (11);
 run;
 
 /*Specialty type threshold*/
@@ -166,7 +172,8 @@ run;
 proc univariate data=medD_prep noprint;
 	var abx_tot_clms;
 	by type_new;
-	output out=specialty_90 p90=p90 median=median mean=mean;
+	output out=specialty_90 p90=p90 p10=p10 median=median mean=mean;
+		where abx_tot_clms ge (11);
 run;
 
 
@@ -208,6 +215,8 @@ create table _90th_ as
 select
 
 	year_var "Year",
+	mean "Mean Prescrip. per Year",
+	median "Median Prescrip. Per Year",
 	p90 "90th Percentile Threshold by Year"
 
 from medD_prep_1;
@@ -216,6 +225,8 @@ create table _90th_spec as
 select
 
 	type_new "Specialty",
+	mean "Mean Prescrip. by Specialty",
+	median "Median Prescrip. by Specialty",
 	p90 "90th Percentile Threshold by Specialty"
 
 from specialty_90;
@@ -224,169 +235,452 @@ from specialty_90;
 quit;
 
 
+proc sort data=medD_prep_2;
+	by  p90_flag_spec;
+
+run;
+
+
+proc univariate data=medD_prep_2 noprint;
+	var rate;
+	by p90_flag_spec;
+	output out=medD_prep_3 q1=Q1 q3=Q3 median=median mean=mean;
+		where abx_tot_clms ge (11);
+run;
+
+proc print data=medD_prep_3;run;
 
 /*Analysis*/
+
+
+/*Now we'll merge tables into one to have one table with ONLY what we want to depict*/
+/*Counts*/
 proc sql;
-create table medD_analysis_1 as
-select
-
-	year_var "Year",
-	count (npi) as num_providers "Number of providers reporting to CMS" format comma10.0,
-	sum (case when abx_tot_clms not in (.) then 1 else 0 end) as num_abx "Number of ABX claims" format comma10.0,
-	sum (case when abx_tot_clms not in (.) and p90_flag in (1) then 1 else 0 end) as Hnum_abx "Number of ABX claims from High Subscribers" format comma10.0,
-	sum (case when abx_tot_clms not in (.) and p90_flag in (0) then 1 else 0 end) as Lnum_abx "Number of ABX claims from non-High Subscribers" format comma10.0,
-
-	median(abx_tot_clms) as med_claims "Median number of ABX Claims",
-	median(rate) as med_rate "Median Prescribing Rate per 1000 Beneficiaries" format 10.1
-	/*,
-	IQR(abx_tot_clms) as iqr_claims "IQR number of ABX Claims"*/
-
-
-from medD_prep_2
-	group by year_var;
-
-/*Overall prescribing part D abx*/
-create table medD_analysis_1a as
+create table final_table_part_I as
 select
 
 	type_new "Specialty",
-	count (distinct npi) as num_providers "Number of providers reporting to CMS" format comma10.0,
-	sum (case when abx_tot_clms not in (.) then abx_tot_clms else 0 end) as num_abx "Number of ABX claims" format comma10.0,
-	sum (case when abx_tot_clms not in (.) and p90_flag in (1) then abx_tot_clms else 0 end) as Hnum_abx "Number of ABX claims from High Subscribers" format comma10.0,
-	sum (case when abx_tot_clms not in (.) and p90_flag in (0) then abx_tot_clms else 0 end) as Lnum_abx "Number of ABX claims from Non-High Subscribers" format comma10.0,
 
-	median(abx_tot_clms) as med_claims "Median number of ABX Claims (Overall)",
-	median(rate) as med_rate "Median Prescribing Rate per 1000 Beneficiaries (Overall)" format 10.1
-	/*,
-	IQR(abx_tot_clms) as iqr_claims "IQR number of ABX Claims"*/
+	sum (case when p90_flag_spec in (1) then 1 else . end) as hi_volume "Higher-volume Prescribers (top 10%)" format comma10.0,
+		sum (case when p90_flag in (1) then abx_tot_clms else 0 end) as Hnum_abx "Number of Prescriptions from High Volume Prescribers" format comma10.0,
+		median(case when p90_flag_spec in (1) then rate else . end) as Hmed_claims format comma10.0 label="Median Number of Prescriptions from High Volume Prescribers per 1,000 Beneficiaries",
 
+	sum (case when p90_flag_spec in (0) then 1 else . end) as lo_volume "Lower-volume Prescribers (bottom 90%)" format comma10.0,
+		sum (case when p90_flag in (0) then abx_tot_clms else 0 end) as Lnum_abx "Number of Prescriptions from Lower Volume Prescribers" format comma10.0,
+		median(case when p90_flag_spec in (0) then rate else . end) as Lmed_claims format comma10.0 label="Median Number of Prescriptions from Lower Volume Prescribers per 1,000 Beneficiaries",
 
-from medD_prep_2
-	group by type_new;
-
-/*high prescriber part D abx*/
-create table medD_analysis_1b as
-select
-
-	type_new "Specialty",
-	count (distinct npi) as num_providers "Number of High Prescribing providers reporting to CMS" format comma10.0,
-	sum (case when abx_tot_clms not in (.) then abx_tot_clms else 0 end) as num_abx "Number of High Prescriber ABX claims" format comma10.0,
-
-	median(abx_tot_clms) as med_claims "Median number of ABX Claims Among High Prescribers",
-	median(rate) as med_rate "Median Prescribing Rate per 1000 Beneficiaries Among High Prescribers" format 10.1
-	/*,
-	IQR(abx_tot_clms) as iqr_claims "IQR number of ABX Claims"*/
-
+	sum (case when p90_flag_spec in (0,1) then 1 else . end) as all_volume "Total Prescribers" format comma10.0,
+		sum (case when p90_flag in (0,1) then abx_tot_clms else 0 end) as all_num_abx "Number of Total Prescriptions" format comma10.0,
+		median(case when p90_flag_spec in (0,1) then rate else . end) as all_med_claims format comma10.0 label="Median Number of Prescriptions per 1,000 Beneficiaries"
 
 from medD_prep_2
-where p90_flag in (1)
-	group by type_new ;
-
-/*Non-high prescriber part D abx*/
-create table medD_analysis_1c as
-select
-
-	type_new "Specialty",
-	count (distinct npi) as num_providers "Number of Non-High Prescribing providers reporting to CMS" format comma10.0,
-	sum (case when abx_tot_clms not in (.) then abx_tot_clms else 0 end) as num_abx "Number of Non-High Prescriber ABX claims" format comma10.0,
-
-		sum(abx_tot_clms) as test_sum,
-	
-	median(abx_tot_clms) as med_claims "Median number of ABX Claims Among Non-High Prescribers",
-	median(rate) as med_rate "Median Prescribing Rate per 1000 Beneficiaries Among Non-High Prescribers" format 10.1
-	/*,
-	IQR(abx_tot_clms) as iqr_claims "IQR number of ABX Claims"*/
-
-
-from medD_prep_2
-where p90_flag in (0)
-	group by type_new ;
-/*High prescribers by specialty 90th percentile*/
-create table medD_analysis_2 as
-select distinct
-
-	year_var "Year",
-
-	sum (case when prscrbr_type in ("Dentist") and p90_flag_spec in (1) then 1 else . end) as prscrbr_type_dent "Dentist (High Prescriber)",
-		sum (case when prscrbr_type in ("Dentist") and p90_flag_spec in (0) then 1 else . end) as Nprscrbr_type_dent "Dentist (Not high Prescriber)",
-
-	sum (case when prscrbr_type in ("Internal Medicine") and p90_flag_spec in (1) then 1 else . end) as prscrbr_type_int "Internal Medicine (High Prescriber)",
-		sum (case when prscrbr_type in ("Internal Medicine") and p90_flag_spec in (0) then 1 else . end) as Nprscrbr_type_int "Internal Medicine (Not high Prescriber)",
-
-	sum (case when prscrbr_type in ("Nurse Practitioner") and p90_flag_spec in (1) then 1 else . end) as prscrbr_type_NP "Nurse Practitioner (High Prescriber)",
-		sum (case when prscrbr_type in ("Nurse Practitioner") and p90_flag_spec in (0) then 1 else . end) as Nprscrbr_type_NP "Nurse Practitioner (Not high Prescriber)",
-
-	sum (case when prscrbr_type in ("Physician Assistant") and p90_flag_spec in (1) then 1 else . end) as prscrbr_type_PA "Physician Assistant (High Prescriber)",
-		sum (case when prscrbr_type in ("Physician Assistant") and p90_flag_spec in (0) then 1 else . end) as Nprscrbr_type_PA "Physician Assistant (Not high Prescriber)",
-
-	sum (case when prscrbr_type in ("Urology") and p90_flag_spec in (1) then 1 else . end) as prscrbr_type_uro "Urology (High Prescriber)",
-		sum (case when prscrbr_type in ("Urology") and p90_flag_spec in (0) then 1 else . end) as Nprscrbr_type_uro "Urology (Not high Prescriber)",
-
-	sum (case when prscrbr_type like '%Family%' and p90_flag_spec in (1) then 1 else . end) as prscrbr_type_fam "Family Medicine (High Prescriber)",
-		sum (case when prscrbr_type like '%Family%' and p90_flag_spec in (0) then 1 else . end) as Nprscrbr_type_fam "Family Medicine (Not high Prescriber)",
-
-	sum (case when prscrbr_type not in ("Dentist", "Internal Medicine", "Nurse Practitioner", "Physician Assistant", "Urology" , "Family") and p90_flag_spec in (1) then 1 else . end) as prscrbr_type_oth "Other (High Prescriber)",
-		sum (case when prscrbr_type not in ("Dentist", "Internal Medicine", "Nurse Practitioner", "Physician Assistant", "Urology" , "Family") and p90_flag_spec in (0) then 1 else . end) as Nprscrbr_type_oth "Other (Not high Prescriber)",
-
+where abx_tot_clms ge (11)
+	group by type_new
+;
 
 /*Percentages*/
+create table final_table_part_II as
+select
 
-	(calculated prscrbr_type_dent/ (calculated Nprscrbr_type_dent+ calculated prscrbr_type_dent)) as pct_dent_high "Percent Dentist High Prescriber" format percent10.2,
-	(calculated prscrbr_type_int/ (calculated Nprscrbr_type_int+ calculated prscrbr_type_int)) as pct_int_high "Percent Internal Medicine High Prescriber" format percent10.2,
-	(calculated prscrbr_type_NP/ (calculated Nprscrbr_type_NP+ calculated prscrbr_type_NP)) as pct_NP_high "Percent Nurse Practitioner High Prescriber" format percent10.2,
-	(calculated prscrbr_type_PA/ (calculated Nprscrbr_type_PA+ calculated prscrbr_type_PA)) as pct_PA_high "Percent Physician Assistant High Prescriber" format percent10.2,
-	(calculated prscrbr_type_uro/ (calculated Nprscrbr_type_uro+ calculated prscrbr_type_uro)) as pct_uro_high "Percent Urology High Prescriber" format percent10.2,
-	(calculated prscrbr_type_fam/ (calculated Nprscrbr_type_fam+ calculated prscrbr_type_fam)) as pct_fam_high "Percent Family Medicine High Prescriber" format percent10.2,
-	(calculated prscrbr_type_oth/ (calculated Nprscrbr_type_oth+ calculated prscrbr_type_oth)) as pct_oth_high "Percent 'Other' High Prescriber" format percent10.2
+	type_new "Specialty",
+	hi_volume,
+	(hi_volume / all_volume) as pct_hi_vol "Percent Higher-volume Prescribers" format percent10.1,
+	Hnum_abx,
+	(Hnum_abx / all_num_abx) as pct_hi_presc "Percent of Prescriptions from Higher-volume Prescribers" format percent10.1,
+	Hmed_claims,
 
-from medD_prep_2
-	group by year_var ;
+	lo_volume,
+	(lo_volume / all_volume) as pct_lo_vol "Percent Lower-volume Prescribers" format percent10.1,
+	Lnum_abx,
+	(Lnum_abx / all_num_abx) as pct_lo_presc "Percent of Prescriptions from Lower-volume Prescribers" format percent10.1,
+	Lmed_claims,
 
-/*High perscribers by annual 90th percentile*/
-
-create table medD_analysis_2a as
-select distinct
-
-	year_var "Year",
-
-	sum (case when prscrbr_type in ("Dentist") and p90_flag_spec in (1) then 1 else . end) as prscrbr_type_dent "Dentist (High Prescriber)",
-		sum (case when prscrbr_type in ("Dentist") and p90_flag_spec in (0) then 1 else . end) as Nprscrbr_type_dent "Dentist (Not high Prescriber)",
-
-	sum (case when prscrbr_type in ("Internal Medicine") and p90_flag_spec in (1) then 1 else . end) as prscrbr_type_int "Internal Medicine (High Prescriber)",
-		sum (case when prscrbr_type in ("Internal Medicine") and p90_flag_spec in (0) then 1 else . end) as Nprscrbr_type_int "Internal Medicine (Not high Prescriber)",
-
-	sum (case when prscrbr_type in ("Nurse Practitioner") and p90_flag_spec in (1) then 1 else . end) as prscrbr_type_NP "Nurse Practitioner (High Prescriber)",
-		sum (case when prscrbr_type in ("Nurse Practitioner") and p90_flag_spec in (0) then 1 else . end) as Nprscrbr_type_NP "Nurse Practitioner (Not high Prescriber)",
-
-	sum (case when prscrbr_type in ("Physician Assistant") and p90_flag_spec in (1) then 1 else . end) as prscrbr_type_PA "Physician Assistant (High Prescriber)",
-		sum (case when prscrbr_type in ("Physician Assistant") and p90_flag_spec in (0) then 1 else . end) as Nprscrbr_type_PA "Physician Assistant (Not high Prescriber)",
-
-	sum (case when prscrbr_type in ("Urology") and p90_flag_spec in (1) then 1 else . end) as prscrbr_type_uro "Urology (High Prescriber)",
-		sum (case when prscrbr_type in ("Urology") and p90_flag_spec in (0) then 1 else . end) as Nprscrbr_type_uro "Urology (Not high Prescriber)",
-
-	sum (case when prscrbr_type like '%Family%' and p90_flag_spec in (1) then 1 else . end) as prscrbr_type_fam "Family Medicine (High Prescriber)",
-		sum (case when prscrbr_type like '%Family%' and p90_flag_spec in (0) then 1 else . end) as Nprscrbr_type_fam "Family Medicine (Not high Prescriber)",
-
-	sum (case when prscrbr_type not in ("Dentist", "Internal Medicine", "Nurse Practitioner", "Physician Assistant", "Urology" , "Family") and p90_flag_spec in (1) then 1 else . end) as prscrbr_type_oth "Other (High Prescriber)",
-		sum (case when prscrbr_type not in ("Dentist", "Internal Medicine", "Nurse Practitioner", "Physician Assistant", "Urology" , "Family") and p90_flag_spec in (0) then 1 else . end) as Nprscrbr_type_oth "Other (Not high Prescriber)",
+	all_volume,
+	all_num_abx,
+	all_med_claims
 
 
-/*Percentages*/
+from final_table_part_I
+	order by type_new
+;
 
-	(calculated prscrbr_type_dent/ (calculated Nprscrbr_type_dent+ calculated prscrbr_type_dent)) as pct_dent_high "Percent Dentist High Prescriber" format percent10.2,
-	(calculated prscrbr_type_int/ (calculated Nprscrbr_type_int+ calculated prscrbr_type_int)) as pct_int_high "Percent Internal Medicine High Prescriber" format percent10.2,
-	(calculated prscrbr_type_NP/ (calculated Nprscrbr_type_NP+ calculated prscrbr_type_NP)) as pct_NP_high "Percent Nurse Practitioner High Prescriber" format percent10.2,
-	(calculated prscrbr_type_PA/ (calculated Nprscrbr_type_PA+ calculated prscrbr_type_PA)) as pct_PA_high "Percent Physician Assistant High Prescriber" format percent10.2,
-	(calculated prscrbr_type_uro/ (calculated Nprscrbr_type_uro+ calculated prscrbr_type_uro)) as pct_uro_high "Percent Urology High Prescriber" format percent10.2,
-	(calculated prscrbr_type_fam/ (calculated Nprscrbr_type_fam+ calculated prscrbr_type_fam)) as pct_fam_high "Percent Family Medicine High Prescriber" format percent10.2,
-	(calculated prscrbr_type_oth/ (calculated Nprscrbr_type_oth+ calculated prscrbr_type_oth)) as pct_oth_high "Percent 'Other' High Prescriber" format percent10.2
+create table final_table_part_III as
+select
+
+
+	sum (case when p90_flag_spec in (1) then 1 else . end) as hi_volume "Higher-volume Prescribers (top 10%)" format comma10.0,
+		sum (case when p90_flag in (1) then abx_tot_clms else 0 end) as Hnum_abx "Number of Prescriptions from High Volume Prescribers" format comma10.0,
+		median(case when p90_flag_spec in (1) then rate else . end) as Hmed_claims format comma10.0 label="Median Number of Prescriptions from High Volume Prescribers per 1,000 Beneficiaries",
+
+	sum (case when p90_flag_spec in (0) then 1 else . end) as lo_volume "Lower-volume Prescribers (bottom 90%)" format comma10.0,
+		sum (case when p90_flag in (0) then abx_tot_clms else 0 end) as Lnum_abx "Number of Prescriptions from Lower Volume Prescribers" format comma10.0,
+		median(case when p90_flag_spec in (0) then rate else . end) as Lmed_claims format comma10.0 label="Median Number of Prescriptions from Lower Volume Prescribers per 1,000 Beneficiaries",
+
+	sum (case when p90_flag_spec in (0,1) then 1 else . end) as all_volume "Total Prescribers" format comma10.0,
+		sum (case when p90_flag in (0,1) then abx_tot_clms else 0 end) as all_num_abx "Number of Total Prescriptions" format comma10.0,
+		median(case when p90_flag_spec in (0,1) then rate else . end) as all_med_claims format comma10.0 label="Median Number of Prescriptions per 1,000 Beneficiaries"
 
 from medD_prep_2
-	group by year_var ;
+	where abx_tot_clms ge (11)
+;
+
+create table final_table_part_IV as
+select
+
+	hi_volume,
+	(hi_volume / all_volume) as pct_hi_vol "Percent Higher-volume Prescribers" format percent10.1,
+	Hnum_abx,
+	(Hnum_abx / all_num_abx) as pct_hi_presc "Percent of Prescriptions from Higher-volume Prescribers" format percent10.1,
+	Hmed_claims,
+
+	lo_volume,
+	(lo_volume / all_volume) as pct_lo_vol "Percent Lower-volume Prescribers" format percent10.1,
+	Lnum_abx,
+	(Lnum_abx / all_num_abx) as pct_lo_presc "Percent of Prescriptions from Lower-volume Prescribers" format percent10.1,
+	Lmed_claims,
+
+	all_volume,
+	all_num_abx,
+	all_med_claims
+
+
+from final_table_part_III
+;
+ 
+quit;
+
+proc print data=final_table_part_IV noobs label;run;
+proc print data=final_table_part_II noobs label;run;
+
+proc print data=medD_prep_3;run;
+
+
+
+/*ANALYSIS*/
+/*Create density groups*/
+proc sql;
+create table analysis_medD as
+select
+
+	*,
+/*Population density dense --> rural*/	
+	case when Prscrbr_RUCA_Desc like '%Metropolitan%' then 0 /*Metro*/
+		 when Prscrbr_RUCA_Desc like '%Micropolitan%' then 1 /*Micro*/
+		 when Prscrbr_RUCA_Desc like '%Small town%' then 2 /*Small Town*/
+		 when Prscrbr_RUCA_Desc like '%Rural%' or Prscrbr_RUCA_Desc like '%Secondary%' then 3 /*Rural*/
+
+	else . end as density_cat "Population density",
+
+
+/*Population density binary, rural or not rural*/	
+	case when Prscrbr_RUCA_Desc like '%Metropolitan%' or Prscrbr_RUCA_Desc like '%Micropolitan%' or Prscrbr_RUCA_Desc like '%Small town%' then 0 /*non-rural*/
+		 when Prscrbr_RUCA_Desc like '%Rural%' or Prscrbr_RUCA_Desc like '%Secondary%' then 1 /*Rural*/
+
+	else . end as density_binary "Population density (binary)",
+
+	median(abx_tot_clms) as med_abx 
+
+
+
+from medD_prep_2
+	group by NPI
+;
+quit;
+
+
+
+
+
+/*Save to SAS dataset folder*/
+data analysis.analysis_medD_2023;
+	set analysis_medD;
+run;
+
+
+
+
+/*Univariate to look at normality (it's not)*/
+proc univariate data=analysis_medD ;
+var rate;
+histogram rate / normal;
+
+	where abx_tot_clms ge (10) and rate LE (1600);
+run;
+	/*i. qq plot to look at normality (still not normal but when we eliminate outliers it's not the worst thing*/
+proc univariate data=analysis_medD normal; 
+	qqplot rate /Normal(mu=est sigma=est color=red l=1);
+	var rate;
+where p90_flag_spec not in (1) and rate LE (1600);
+run;
+
+/*clear all your other terrible results*/
+dm 'odsresults; clear';
+
+ods graphics noborder;
+
+/*Label numeric density groups*/
+proc format;
+    value density_cat
+        0 = 'Metropolitan'
+        1 = 'Micropolitan'
+        2 = 'Small Town'
+        3 = 'Rural';
+
+
+run;
+/*I like the categorical approach here. Looking at each category of population density grouped by "most urban (metropolitan)" to "least urban (rural)."
+Each group is more likely to be  high prescriber as compared to the reference group (metropolitan), but there are some interesting trends when looking
+at less urban groups compared to each other. For ex: micropolitan specialties (group 1) are less likely to be be high prescribers as compared to small town
+categorized specialties (group 2). However, group 1 is more likely to be a high presciber as compared to their rural (group 3) counterparts.*/
+
+
+proc logistic data=analysis_medD plots(only)=(oddsratio(range=0.5, 2.75)); /*plotting OR each density compared to others*/
+	class p90_flag_spec (param=ref ref='0') density_cat (param=ref ref='Metropolitan') type_new (param=ref ref='Family Practice');
+	/*multivariate model using both density and specialty type*/
+	model p90_flag_spec = density_cat type_new/ noor parmlabel;/*no ODDS ratio (noor) to simplyfy output we don't need this OR, we want the comprehensive one next*/
+/*Display all comparisons of ORs*/
+	oddsratio density_cat;
+where abx_tot_clms ge (10);
+		format density_cat density_cat.;
+
+run;
+
+
+/*ANOVA: independent still density category, but dependent is # of abx. (can try claim rate too) ANOVA takes each group (density categories) and compares the mean of each outcome (abx perscriptions), are they more different than we would expect? 
+		I.e.: are we seeing higher mean abx prescrbiing practices in more rural(small town, micro etc.) as compared to their metropolitan counterparts (reference group)? F-statistic, pull those textbooks out and brush off
+			  the dust, the F-statistic is the ratio of variance between groups compared to the ratio within each group. How much does each individual group vary and how does that compare between groups. It's tricky but I
+			  feel adds value here. 
+
+
+
+			Fstat= Within-group variance / Between-group variance
+
+*/
+
+
+/*Here's an interpretation: There were (statistically) significant differences in the mean number of antibiotic claims across density categories and across practice specialty types.*/
+
+title;
+/*ANOVA model*/
+
+		/*So this isn't exactly normal, however when we eliminate outliers (90th percentile and above), we observe somewhat more normal distribution (still meh.) so we'll go with an ANOVA but with acknowledged loss of power*/
+
+/*ANOVA, but with two independent (specialty type, and population density). We'll assess those against each other and against the number of claims while elminating the ouliers above the 90th percentile.*/
+proc glm data=analysis_medD;
+/*Measuring both density and specialty type as independent categorical variables*/
+    class density_cat type_new;
+/*abx claims are continuous dependent. Looking at density and specialty AND (key point here), the interaction between density and specialty as it affects the mean number of claims*/
+    model rate=density_cat type_new density_cat*type_new;
+
+		where p90_flag_spec not in (1) and abx_tot_clms ge (10) ;		
+run;
+
+/*Because it's not actually normal we'll also run a Wilcoxon rank-sum test to compare non-parametric median prescribing (and med. rate) across densities
+
+https://www.cdc.gov/mmwr/volumes/71/wr/mm7106a3.htm
+
+Basically using this method but across pop. density: Is the median abx prescription claim rate different across population density?*/
+ods html style=journal; 
+proc npar1way data=analysis_medD wilcoxon plots(only)=(normalboxplot scores=data);
+title "Nonparametric test to compare median abx claims rate by provider and population density of provider location";
+	class density_cat;
+	var rate; /*Use the rate to account for some providers having many more patients ie. family practice more than dental surgery see Gouin et a. (2019)*/
+
+			where p90_flag_spec not in (1) and abx_tot_clms ge (10);
+
+			format density_cat density_cat.;
+
+run;
+
+
+/*For quantile regression in SAS we need to reverse our groups. Quantreg as a procedure takes the highest category and uses it as a reference.
+  Since we have "old" SAS, we don't have the full class statementment with parameters (param=ref) and reference (ref=0) statements. */
+data model_quant;
+set analysis_medD;
+length year_char $4.;
+    density_binary_reversed = 1 - density_binary;
+
+	density_cat_reversed = .;
+
+		if density_cat = 0 then density_cat_reversed = 3;
+		if density_cat = 1 then density_cat_reversed = 2;
+		if density_cat = 2 then density_cat_reversed = 1;
+		if density_cat = 3 then density_cat_reversed = 0;
+
+	year_char = '';
+		
+		if year_var = 2018 then year_char = "2018";
+		if year_var = 2019 then year_char = "2019";
+		if year_var = 2020 then year_char = "2020";
+		if year_var = 2021 then year_char = "2021";
+		if year_var = 2022 then year_char = "2022";
+		if year_var = 2023 then year_char = "2023";
+run;
+
+/*Check to make sure your "new" reveresed variables are the same as the old but in the opposite order or character*/
+proc freq data=model_quant; tables density_cat density_cat_reversed year_char/ norow nocol nopercent nocum;run;
+
+proc format;
+
+value density_binary_reversed 
+			0= "Rural"
+			1= "Urban";
+
+value $type_new
+
+		"Dentist" = "1. Dentist" 
+		"Family Practice" = "2. Fam. Prac."  
+		"Internal Medicine" = "7. Int. Med."
+		"Nurse Practitioner" = "3. NP"
+		"Other" = "4. Other"  
+		"Physician Assistant" = "6. PA" 
+		"Urology" =  "5. Uro"
+;
+
+run;
+
+dm 'odsresults;clear';
+/*perform quantile regression in a few ways. First plot shows rate by quantile. Each subsequent plot shows the rate diff on the y axis from the first plot and how it changes over quantiles.*/
+ods html style=journal; 
+title;
+proc sort data=model_quant;by year_char;run;
+/*Full model, add and subtract from the class and model statements to look at different independent variables predicting rate.
+  Use by statement to view by year*/
+proc quantreg data=model_quant;
+/*group by year
+by year_char;*/
+/*Class is our predictor*/
+class density_binary_reversed type_new year_char;
+    model rate = density_binary_reversed type_new year_char/ quantile= 0.05 to 0.95 by 0.05 plot=quantplot(density_binary_reversed);
+
+	*where abx_tot_clms ge (10) and year_var in (2023);
+
+	output out = predictionmodel_18 p = predquant;
+	label density_binary_reversed = "Density:" type_new = "Specialty" year_char = "Year";
+
+		format density_binary_reversed density_binary_reversed. type_new $type_new.;
+
+run;
+
+/*Create visual for yearly predicted claim rate from model output for easier viewing*/
+proc sort data=predictionmodel_18 out=annual_plot;by year_char;run;
+
+proc sql;
+create table graphics_year as
+select
+
+	year_char,
+	median(predquant1) as med_05,
+	median(predquant2) as med_10,
+	median(predquant4) as med_25,
+	median(predquant10) as med_50,
+	median(predquant15) as med_75,
+	median(predquant18) as med_90,
+	median(predquant19) as med_95
+
+
+
+from annual_plot
+	where density_binary in (1) and type_new not in ('Internal Medicine') /*exclude our two reference groups*/
+
+	group by year_char
+
+
+;
 
 quit;
 
-proc print data=medD_analysis_2;run;
+
+ods graphics / noborder labelmax=3700;
+ods html style=HTMLBlue; 
+proc sgplot data = graphics_year;
+title;
+yaxis max=1000 label = "Predicted claim rate per 1,000 beneficiaries";
+
+	series x = year_char y = med_05 / curvelabel = '5 %tile';
+	*series x = year_char y = med_10/curvelabel = '10 %tile';
+	series x = year_char y = med_25 / curvelabel = '25 %tile';
+	series x = year_char y = med_50 / curvelabel = '50 %tile';
+	series x = year_char y = med_75 / curvelabel = '75 %tile';
+	series x = year_char y = med_90 / curvelabel = '90 %tile' datalabel;
+	series x = year_char y = med_95 / curvelabel = '95 %tile' datalabel;
+
+run;
+
+
+
+
+
+
+
+
+
+/*Here are some box/whisker plots to help visualize prescribing*/
+
+proc format;
+    value densityfmt
+        0 = "Metropolitan"
+        1 = "Micropolitan"
+        2 = "Small Town"
+		3 = "Rural";
+
+
+run;
+
+title;footnote;
+ods graphics noborder;
+/*Plot by density and abx count only (right skew: median < mean)*/
+proc sgplot data=model_quant noborder;
+title height=10pt "Antibiotic prescribing rate and IQR by specialty type, North Carolina 2018-2023";
+    vbox rate / category=type_new nooutliers
+        fillattrs=(color=lightgray) 
+        meanattrs=(symbol=circlefilled color=black size=8)
+		medianattrs=(color=black pattern=dash thickness=2)
+        whiskerattrs=(thickness=1 color=black)
+			displaystats=(median mean) ;
+
+    xaxis label="Specialty" valueattrs= (family="Arial" size=8)
+		labelattrs= (family="Arial" weight=bold size=8);
+
+
+    yaxis min=0 max=2000 label="Antibiotic Prescription Rate per 1,000 Beneficiaries" valueattrs= (family="Arial" size=8)
+		labelattrs= (family="Arial" weight=bold size=8);
+
+    format density_cat densityfmt. density_binary_reversed density_binary_reversed.;
+
+		where abx_tot_clms ge (10);
+
+
+run;
+title;
+/*Plot and group by specialty type*/
+proc sgplot data=analysis_medD noborder;
+    vbox rate / category=density_cat group=type_new nooutliers
+        /*fillattrs=(color=CX80B1D3) */
+        meanattrs=(symbol=circlefilled color=red size=8)
+		medianattrs=(color=red)
+        whiskerattrs=(thickness=1 color=black);
+
+    xaxis label="Population Density Category" valueattrs= (family="Arial" size=8)
+		labelattrs= (family="Arial" weight=bold size=8);
+
+
+    yaxis min=0 max=2000 label="Antibiotic Prescription Rate per 1,000 Patients" valueattrs= (family="Arial" size=8)
+		labelattrs= (family="Arial" weight=bold size=8);
+
+
+	format density_cat densityfmt.;
+		keylegend / title="Specialty Type" location=outside position=bottom noborder titleattrs= (family="Arial" size=8 weight=bold) valueattrs= (family="Arial" size=8);
+
+		where abx_tot_clms ge (10);
+run;
+
+
+
+
+
+
+/*Final output for all these fun visuals in one place, I chose RTF but feel free to edit*/
 /*clear all your other terrible results*/
 dm 'odsresults; clear';
 
@@ -397,17 +691,44 @@ title; footnote;
 
 ods rtf file="&outpath.Medicare_ptD_tables_&sysdate..rtf" 
 /*Named a generic overwriteable name so we can continue to reproduce and autopopulate a template;
-style=journal */startpage=no;
+style=journal */startpage=never;
 
 options number nodate;
 
 
-ods rtf text= "Antibiotic Prescribing Claims by Year, North Carolina 2018-2023";
-proc print data=medD_analysis_1 noobs label 
+ods rtf text= "Antibiotic Prescribing Claims by Volume, North Carolina 2018-2023";
+proc print data=final_table_part_IV noobs label 
 /*General styling to fit a portrait orientation*/
 style(table)=[cellpadding=4 cellspacing=0 borderwidth=0 frame=void rules=none width=100%];
 
-var year_var num_providers num_abx Hnum_abx Lnum_abx med_claims med_rate   
+var hi_volume pct_hi_vol Hnum_abx pct_hi_presc Hmed_claims lo_volume pct_lo_vol Lnum_abx pct_lo_presc Lmed_claims all_volume all_num_abx all_med_claims   
+    / 
+/*Specific "table 1" styling*/
+    /* Header: top and bottom borders only */
+    style(header)=[
+        font_weight=bold 
+        backgroundcolor=white 
+        just=center 
+        borderbottomcolor=black borderbottomwidth=1 
+        bordertopcolor=black bordertopwidth=1 
+        borderleftwidth=0 borderrightwidth=0]
+
+    /* Data: center everything, don't bold anything but headers*/
+    style(data)=[
+        just=center 
+        fontsize=9pt 
+        bordercolor=white borderwidth=0];
+
+
+run;
+title;
+
+ods rtf text= "Antibiotic Prescribing Claims by Volume, North Carolina 2018-2023";
+proc print data=final_table_part_II noobs label 
+/*General styling to fit a portrait orientation*/
+style(table)=[cellpadding=4 cellspacing=0 borderwidth=0 frame=void rules=none width=100%];
+
+var type_new hi_volume pct_hi_vol Hnum_abx pct_hi_presc Hmed_claims lo_volume pct_lo_vol Lnum_abx pct_lo_presc Lmed_claims all_volume all_num_abx all_med_claims 
     / 
 /*Specific "table 1" styling*/
     /* Header: top and bottom borders only */
@@ -430,188 +751,119 @@ run;
 title;
 
 
-ods rtf text= "Overall Antibiotic Prescribing Claims by Specialty Type, North Carolina 2018-2023";
-proc print data=medD_analysis_1a noobs label 
-/*General styling to fit a portrait orientation*/
-style(table)=[cellpadding=4 cellspacing=0 borderwidth=0 frame=void rules=none width=100%];
 
-var type_new num_providers num_abx Hnum_abx Lnum_abx med_claims med_rate    
-    / 
-/*Specific "table 1" styling*/
-    /* Header: top and bottom borders only */
-    style(header)=[
-        font_weight=bold 
-        backgroundcolor=white 
-        just=center 
-        borderbottomcolor=black borderbottomwidth=1 
-        bordertopcolor=black bordertopwidth=1 
-        borderleftwidth=0 borderrightwidth=0]
 
-    /* Data: center everything, don't bold anything but headers*/
-    style(data)=[
-        just=center 
-        fontsize=9pt 
-        bordercolor=white borderwidth=0];
+ods rtf text=  "Analysis 1: Odds Ratio, high prescriber likelihood by density accounting for specialty";
+proc format;
+    value density_cat
+        0 = 'Metropolitan'
+        1 = 'Micropolitan'
+        2 = 'Small Town'
+        3 = 'Rural';
 
 
 run;
 
 
-ods rtf text= "High Prescriber Antibiotic Prescribing Claims by Specialty Type, North Carolina 2018-2023";
-proc print data=medD_analysis_1b noobs label 
-/*General styling to fit a portrait orientation*/
-style(table)=[cellpadding=4 cellspacing=0 borderwidth=0 frame=void rules=none width=100%];
-
-var type_new num_providers num_abx med_claims med_rate     
-    / 
-/*Specific "table 1" styling*/
-    /* Header: top and bottom borders only */
-    style(header)=[
-        font_weight=bold 
-        backgroundcolor=white 
-        just=center 
-        borderbottomcolor=black borderbottomwidth=1 
-        bordertopcolor=black bordertopwidth=1 
-        borderleftwidth=0 borderrightwidth=0]
-
-    /* Data: center everything, don't bold anything but headers*/
-    style(data)=[
-        just=center 
-        fontsize=9pt 
-        bordercolor=white borderwidth=0];
-
+proc logistic data=analysis_medD plots(only)=(oddsratio(range=0.5, 2.58)); /*plotting OR each density compared to others*/
+	class p90_flag_spec (param=ref ref='0') density_cat (param=ref ref='Metropolitan') type_new (param=ref ref='Family Practice');
+	/*multivariate model using both density and specialty type*/
+	model p90_flag_spec = density_cat type_new/ noor parmlabel;/*no ODDS ratio (noor) to simplyfy output we don't need this OR, we want the comprehensive one next*/
+/*Display all comparisons of ORs*/
+	oddsratio density_cat;
+where abx_tot_clms ge (10);
+		format density_cat density_cat.;
 
 run;
 
-ods rtf text= "Non-High Prescriber Antibiotic Prescribing Claims by Specialty Type, North Carolina 2018-2023";
-proc print data=medD_analysis_1c noobs label 
-/*General styling to fit a portrait orientation*/
-style(table)=[cellpadding=4 cellspacing=0 borderwidth=0 frame=void rules=none width=100%];
 
-var type_new num_providers num_abx med_claims med_rate     
-    / 
-/*Specific "table 1" styling*/
-    /* Header: top and bottom borders only */
-    style(header)=[
-        font_weight=bold 
-        backgroundcolor=white 
-        just=center 
-        borderbottomcolor=black borderbottomwidth=1 
-        bordertopcolor=black bordertopwidth=1 
-        borderleftwidth=0 borderrightwidth=0]
+ods rtf text=  "Analysis 2: Wilcoxon rank sum, mean/median distribution by density and specialty";
 
-    /* Data: center everything, don't bold anything but headers*/
-    style(data)=[
-        just=center 
-        fontsize=9pt 
-        bordercolor=white borderwidth=0];
+proc npar1way data=analysis_medD wilcoxon plots(only)=(median scores=databoxplot);
+title "Nonparametric test to compare median abx claims rate by provider and population density of provider location";
+	class density_cat;
+	var rate; /*Use the rate to account for some providers having many more patients ie. family practice more than dental surgery see Gouin et a. (2019)*/
+	
+			where p90_flag_spec not in (1) and abx_tot_clms ge (10);
 
+			format density_cat density_cat.;
 
 run;
 
-ods rtf text=  "Percent High Prescribers Compared to Annual Threshold by Specialty Type, Year, North Carolina 2018-2023";
-proc print data=medD_analysis_2 noobs label 
-/*General styling to fit a portrait orientation*/
-style(table)=[cellpadding=4 cellspacing=0 borderwidth=0 frame=void rules=none width=100%];
+title;footnote;
+ods graphics noborder;
+/*Plot by density and abx count only (right skew: median < mean)*/
+proc sgplot data=model_quant noborder;
+title height=10pt "Antibiotic prescribing rate and IQR by specialty type, North Carolina 2018-2023";
+    vbox rate / category=type_new nooutliers
+        fillattrs=(color=lightgray) 
+        meanattrs=(symbol=circlefilled color=black size=8)
+		medianattrs=(color=black pattern=dash thickness=2)
+        whiskerattrs=(thickness=1 color=black)
+			displaystats=(median mean) ;
 
-var year_var pct_dent_high pct_int_high pct_NP_high pct_PA_high pct_uro_high pct_fam_high pct_oth_high    
-    / 
-/*Specific "table 1" styling*/
-    /* Header: top and bottom borders only */
-    style(header)=[
-        font_weight=bold 
-        backgroundcolor=white 
-        just=center 
-        borderbottomcolor=black borderbottomwidth=1 
-        bordertopcolor=black bordertopwidth=1 
-        borderleftwidth=0 borderrightwidth=0]
-
-    /* Data: center everything, don't bold anything but headers*/
-    style(data)=[
-        just=center 
-        fontsize=9pt 
-        bordercolor=white borderwidth=0];
+    xaxis label="Specialty" valueattrs= (family="Arial" size=8)
+		labelattrs= (family="Arial" weight=bold size=8);
 
 
-run;
+    yaxis min=0 max=2000 label="Antibiotic Prescription Rate per 1,000 Beneficiaries" valueattrs= (family="Arial" size=8)
+		labelattrs= (family="Arial" weight=bold size=8);
 
-ods rtf text=  "Percent of High Prescribers Compared to like Specialties by Specialty Type, Year, North Carolina 2018-2023";
-proc print data=medD_analysis_2a noobs label 
-/*General styling to fit a portrait orientation*/
-style(table)=[cellpadding=4 cellspacing=0 borderwidth=0 frame=void rules=none width=100%];
+    format density_cat densityfmt. density_binary_reversed density_binary_reversed.;
 
-var year_var pct_dent_high pct_int_high pct_NP_high pct_PA_high pct_uro_high pct_fam_high pct_oth_high    
-    / 
-/*Specific "table 1" styling*/
-    /* Header: top and bottom borders only */
-    style(header)=[
-        font_weight=bold 
-        backgroundcolor=white 
-        just=center 
-        borderbottomcolor=black borderbottomwidth=1 
-        bordertopcolor=black bordertopwidth=1 
-        borderleftwidth=0 borderrightwidth=0]
-
-    /* Data: center everything, don't bold anything but headers*/
-    style(data)=[
-        just=center 
-        fontsize=9pt 
-        bordercolor=white borderwidth=0];
+		where abx_tot_clms ge (10);
 
 
 run;
+title;
+/*Plot and group by specialty type*/
+proc sgplot data=analysis_medD noborder;
+    vbox rate / category=density_cat group=type_new nooutliers
+        /*fillattrs=(color=CX80B1D3) */
+        meanattrs=(symbol=circlefilled color=red size=8)
+		medianattrs=(color=red)
+        whiskerattrs=(thickness=1 color=black);
 
-ods rtf text=  "Annual 90th Percentile of Prescribing, North Carolina CMS Prescribers, 2018-2023";
-proc print data=_90th_ noobs label 
-/*General styling to fit a portrait orientation*/
-style(table)=[cellpadding=4 cellspacing=0 borderwidth=0 frame=void rules=none width=100%];
+    xaxis label="Population Density Category" valueattrs= (family="Arial" size=8)
+		labelattrs= (family="Arial" weight=bold size=8);
 
-var year_var p90     
-    / 
-/*Specific "table 1" styling*/
-    /* Header: top and bottom borders only */
-    style(header)=[
-        font_weight=bold 
-        backgroundcolor=white 
-        just=center 
-        borderbottomcolor=black borderbottomwidth=1 
-        bordertopcolor=black bordertopwidth=1 
-        borderleftwidth=0 borderrightwidth=0]
 
-    /* Data: center everything, don't bold anything but headers*/
-    style(data)=[
-        just=center 
-        fontsize=9pt 
-        bordercolor=white borderwidth=0];
+    yaxis min=0 max=2000 label="Antibiotic Prescription Rate per 1,000 Patients" valueattrs= (family="Arial" size=8)
+		labelattrs= (family="Arial" weight=bold size=8);
 
+
+	format density_cat densityfmt.;
+		keylegend / title="Specialty Type" location=outside position=bottom noborder titleattrs= (family="Arial" size=8 weight=bold) valueattrs= (family="Arial" size=8);
+
+		where abx_tot_clms ge (10);
+run;
+
+
+
+ods rtf text=  "Full Quantile Regression Model: ABX Claims per 1,000 Beneficiaries by specialty, population density, and year";
+/*Full model, add and subtract from the class and model statements to look at different independent variables predicting rate.
+  Use by statement to view by year*/
+proc quantreg data=model_quant;
+/*group by year*/
+by year_char;
+/*Class is our predictor*/
+class density_binary_reversed type_new year_char;
+    model rate = density_binary_reversed type_new year_char/ quantile= 0.05 to 0.95 by 0.05 plot=quantplot(density_binary_reversed);
+
+	*where abx_tot_clms ge (10) and year_var in (2023);
+
+	output out = predictionmodel_18 p = predquant;
+	label density_binary_reversed = "Density:" type_new = "Specialty" year_char = "Year";
+
+		format density_binary_reversed density_binary_reversed. type_new $type_new.;
 
 run;
 
-ods rtf text=  "Specialty 90th Percentile of Prescribing, North Carolina CMS Prescribers, 2018-2023";
-proc print data=_90th_spec noobs label 
-/*General styling to fit a portrait orientation*/
-style(table)=[cellpadding=4 cellspacing=0 borderwidth=0 frame=void rules=none width=100%];
-
-var type_new p90     
-    / 
-/*Specific "table 1" styling*/
-    /* Header: top and bottom borders only */
-    style(header)=[
-        font_weight=bold 
-        backgroundcolor=white 
-        just=center 
-        borderbottomcolor=black borderbottomwidth=1 
-        bordertopcolor=black bordertopwidth=1 
-        borderleftwidth=0 borderrightwidth=0]
-
-    /* Data: center everything, don't bold anything but headers*/
-    style(data)=[
-        just=center 
-        fontsize=9pt 
-        bordercolor=white borderwidth=0];
-
-
-run;
 
 ods rtf close;
 
+
+
+
+
+title;
