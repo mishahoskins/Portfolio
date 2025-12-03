@@ -4,16 +4,15 @@
  * Program Name:  CDC_nonKPC_upload 
  * Author:        Mikhail Hoskins
  * Date Created:  08/25/2025
- * Date Modified: 10/20/2025
+ * Date Modified: .
  * Description:   CPO count by mechanism data pull from monthly denormalized tables. Easy to run in office, can take longer
 				  on VPN. 
  *
- * Inputs:       laboratory_dd_table_cre : Z:\YYYYMMDD (denormalized lab table)
- *				 admin_trail : Z:\YYYYMMDD (denormalized admin package)
- *
- * Output:       CDC_nonKPC_RedCap_DATE.xlsx <-- ODS output, line list of all CPO within specified date range to review and submit to CDC. 
- *
- * Notes:        Skillsets: General ETL, SQL, Macros, %like extraction, regular expression (PRX), conditional joins, deduplication
+ * Inputs:       laboratory_dd_table_cre : Z:\YYYYMMDD
+ * Output:       CDC_nonKPC_RedCap_DATE.xlsx <-- a line list of all CPO within specified date range to review and submit to CDC. 
+ * Notes:        Program pulls CPO HAIs. ***CPOs will be updated in the denormalized tables to 
+ *				 reflect CPO rule change . 
+ *				 Annotations are between /* to help guide.   
  *				 
  *
  *------------------------------------------------------------------------------
@@ -28,11 +27,11 @@ libname denorm 'Z:\20251001'; /*Select the file name you want from the Z drive. 
 
 /*Now we'll set our case manager names: update as needed to the number/names of those responding to NCEDSS entries AS THEIR NAMES APPEAR IN NCEDSS.*/
 /*Misspelled names or different capitalizations my throw off numbers by 1 or 2. Make sure names are correct in NCEDSS*/
-%let name1 = --deidentified for git--;
-%let name2 = --deidentified for git--;	
-%let name3 = --deidentified for git--;
-%let name4 = --deidentified for git--;
-%let name5 = --deidentified for git--;
+%let name1 = Damion Brown;
+%let name2 = Kendalyn Stephens;	
+%let name3 = Lauren Pasutti;
+%let name4 = Catie Bryan;
+%let name5 = Emily Berns;
 
 /*Worth checking the log to make sure they're displaying properly*/
 	%put &name1;

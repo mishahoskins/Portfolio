@@ -24,7 +24,9 @@
 /*State pop.(update annually)*/
 %let state_pop = 10835491;
 
-	/*update these*/
+					/*------------*/
+					/*update these*/
+					/*------------*/
 %let mindate = 01Jan2025; /*Minimum date you want to view (usually start of the year for monthly graphs). We also use this for the year max to make sure we're displaying non-complete data for the most recent year*/
 %let maxmonth = 01Oct2025;/*Same as above but most recent month 1-denorm table month*/
 
@@ -48,8 +50,9 @@ from analysis.analysis_forgraphs
 ;
 quit;
 
-/*Ok, main step here: group CRE +CPO and rename STRA to GAS. Then we are assigning the most recent month/year a "tag" so we display those as a separate graph. The most recent month/year data will display in a slightly
+/*Ok, main step here: group CRE + CPO and rename STRA to GAS. Then we are assigning the most recent month/year a "tag" so we display those as a separate graph. The most recent month/year data will display in a slightly
 lighter shaded bar in the output as "data not complete"*/
+/*Step 1: create month and year tags, CRE + CPO = CPO, and STRA = GAS*/
 proc sql;
 create table rename as
 select *,
@@ -69,12 +72,13 @@ from analysis.analysis_forgraphs
 ;
 quit;
 
-/*We have a few CPO with multiple mechanisms but we only want to count them once in our case count, quick dedupe step*/
+/*Step 2: CPO can have multiple mechanisms but we only want to count them once in our case count, quick dedupe step but only for case counts, 
+		  for mechanism counts we want to include ALL CPO mechanisms even if we double count an individual person*/
 proc sort data=rename out=rename_2 nodupkey;
 by case_id type_new;
 run;
 
-/*Create a "tag" for everything but the most recent month, then a separate column for the most recent month. We'll make the transparency higher to indicate data may not be complete*/
+/*Step 3: Create a "tag" for everything but the most recent month, then a separate column for the most recent month. We'll make the transparency higher to indicate data may not be complete*/
 proc sql;
 create table cases_count as
 select 
@@ -97,6 +101,7 @@ select
 from rename_2
 
 ;
+/*Do the same for mechanism, but without the deduplicated set*/
 create table cases_count_mech as
 select 
 
@@ -119,8 +124,11 @@ select
 
 from rename
 ;
-
 quit;
+
+/*Done, now we have a working dataset that has the most recent month/year clearly tagged or "flagged" for our graphs. Proc sgplot gets really dicey with
+  order and syntax and usually just trial and error. For me it's worth the effort so I don't have to touch any of this in Excel later on, but you could
+  print your datasets from here and do this in excel with pivot tables if you're a psycopath.*/
 
 /*Macros because lazy*/
 
@@ -145,7 +153,7 @@ Total*/
 
 
 
-from rename_2
+from rename_2 /*deduped dataset*/
 where EVENT_DATE ge ('01jan25'd)
 	group by testreportmonth
 
@@ -201,14 +209,12 @@ select
 		sum (case when CPO_CARB_MECHANISM in ("NDM") then 1 else 0 end) as NDM "NDM",
 		sum (case when CPO_CARB_MECHANISM in ("Other") then 1 else 0 end) as oth "Other"
 
-from rename
+from rename /*not deduped dataset, counting mechanisms not unique individuals here*/
 where EVENT_DATE ge ('01jan25'd)
 	group by testreportmonth
-
-
 ;
-
 quit;
+
 ods proclabel="CPO Mechanism Table";
 proc print data=mech_metrics noobs label contents= "Month, CPO Mechanism";run;
 
@@ -249,7 +255,7 @@ run;
 %mend;
 
 
-/*Macro for stacked bar graphs. Diabolical, lightly shaded last bar for most recent data to show incompleteness*/
+/*Macro for stacked bar graphs. Diabolical two vbar code here, lightly shaded last bar for most recent data to show incompleteness.*/
 %macro stack_graphs (source=, measure=, contentslabel=, timevar=, response_1=, timevar2=, response_2=, timeframe=, title= , color_schm=, disease=, startdate=, exclusion=);  
 ods proclabel="Bar Graphs, &timevar2: &contentslabel";
 proc sgplot data = &source pad=(top=10) noborder 
@@ -304,7 +310,6 @@ ods graphics /noborder;
 title; footnote;
 
 /*Set your output pathway here*/ 
-
 ods pdf file="T:\HAI\Code library\Epi curve example\analysis\MDRO_trends 2025_&sysdate..pdf" 
 /*Named a generic overwriteable name so we can continue to reproduce and autopopulate a template;*/
 style=journal startpage=no contents=yes;

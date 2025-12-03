@@ -8,13 +8,13 @@
  * Description:   The purpose of this code is to extract all MDRO events from the denormalized tables and match them with who has worked on each event.
  *				  Although rare, each event can have multiple state employees who have commented, or otherwise worked on the case. 
  *
- * Inputs:       laboratory_dd_table_cre, CLASSIFICATION_CLASSIFICATION, admin_trail : Z:\YYYYMMDD (lab results, administrative package)
+ * Inputs:       laboratory_dd_table_cre : Z:\YYYYMMDD
  * Output:       assignments_&sysdate..xlsx <-- a line list of all MDRO within specified date range to review assignments. 
  * Notes:        
  *				
- *				 Labeled ETL process: extract raw data, transform (kinda) into what we want, load a dataset to use in future analysis. This extract creates a table/dataset that is analyzed further down the pipeline.
- * 				 Skillsets:
- *				 	SQL, MSSQL, conditional joins, pattern matching, deduplication, ODS output, macros
+ *				 Annotations are between /* to help guide. We use an ETL process: extract raw data, transform (kinda) into what we want, 
+ * 				 load a dataset to use in future analysis. 
+ *				 
  *
  *------------------------------------------------------------------------------
  */
@@ -43,11 +43,11 @@ libname mydblib odbc
 
 /*Now we'll set our case manager names: update as needed to the number/names of those responding to NCEDSS entries AS THEIR NAMES APPEAR IN NCEDSS.*/
 /*Misspelled names or different capitalizations my throw off numbers by 1 or 2. Make sure names are correct in NCEDSS*/
-%let name1 = --removed for deidentification--;
-%let name2 = --removed for deidentification--;	
-%let name3 = --removed for deidentification--;
-%let name4 = --removed for deidentification--;
-%let name5 = --removed for deidentification--;
+%let name1 = Damion Brown;
+%let name2 = Kendalyn Stephens;	
+%let name3 = Lauren Pasutti;
+%let name4 = Catie Bryan;
+%let name5 = Emily Berns;
 
 /*Worth checking the log to make sure they're displaying properly*/
 	%put &name1;
@@ -177,6 +177,19 @@ from specdate_add as a left join cpo_mechs as b on a.case_id = b.case_id
 quit;
 
 
+
+proc print data=merge_dates_mech;run;
+
+
+
+
+
+
+
+
+
+
+
 /*pull out just we need from denormalized tables, will make future steps and edits quicker*/
 proc sql;
 create table assignments_base as
@@ -217,8 +230,9 @@ select distinct
 	b.case_manag 'Assigned To:'
 
 from MDRO_raw a left join assignments_base b on a.CASE_ID = b.CASE_ID
+		having MDRO_class not in ('GAS')
 	order by report_date asc
-	
+
 ;
 
 quit;
@@ -241,8 +255,6 @@ quit;
 
 /*one last clear of any results*/
 dm 'odsresults; clear';
-
-
 
 						/*III.		LOAD			*/
 
