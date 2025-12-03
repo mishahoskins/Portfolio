@@ -43,11 +43,11 @@ libname mydblib odbc
 
 /*Now we'll set our case manager names: update as needed to the number/names of those responding to NCEDSS entries AS THEIR NAMES APPEAR IN NCEDSS.*/
 /*Misspelled names or different capitalizations my throw off numbers by 1 or 2. Make sure names are correct in NCEDSS*/
-%let name1 = Damion Brown;
-%let name2 = Kendalyn Stephens;	
-%let name3 = Lauren Pasutti;
-%let name4 = Catie Bryan;
-%let name5 = Emily Berns;
+%let name1 = *****;;
+%let name2 = *****;;	
+%let name3 = *****;;
+%let name4 = *****;;
+%let name5 = *****;
 
 /*Worth checking the log to make sure they're displaying properly*/
 	%put &name1;
@@ -100,7 +100,7 @@ from DENORM.CASE as s left join Denorm.CASE_PHI as a on s.case_id=a.case_id
 
 	where s.CLASSIFICATION_CLASSIFICATION in ("Confirmed", "Probable")
 			and (s.type = "CRE" or s.type = "CPO");	*CRE became CPO event in May 2025;
-/*Removed the REPORT_TO_CDC=îYesî filter for Carbapenem-resistant Enterobacteriaceae*/
+/*Removed the REPORT_TO_CDC=‚ÄùYes‚Äù filter for Carbapenem-resistant Enterobacteriaceae*/
 
 quit;
 /*Combine to one dataset*/
@@ -275,3 +275,4 @@ proc print data=min_max_dt noobs label;run;
 
 
 ods excel close;
+
