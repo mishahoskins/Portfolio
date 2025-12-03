@@ -440,7 +440,7 @@ proc logistic data=analysis_medD plots(only)=(oddsratio(range=0.5, 2.75)); /*plo
 	model p90_flag_spec = density_cat type_new/ noor parmlabel;/*no ODDS ratio (noor) to simplyfy output we don't need this OR, we want the comprehensive one next*/
 /*Display all comparisons of ORs*/
 	oddsratio density_cat;
-where abx_tot_clms ge (10);
+		where abx_tot_clms ge (10);
 		format density_cat density_cat.;
 
 run;
@@ -493,7 +493,7 @@ title "Nonparametric test to compare median abx claims rate by provider and popu
 run;
 
 
-/*For quantile regression in SAS we need to reverse our groups. Quantreg as a procedure takes the highest category and uses it as a reference.
+/*For quantile regression in SAS we need to reverse our groups. Quantreg as a procedure takes the highest category and uses it as a reference (not entirely true we can format, and order=formatted but initially it wasn't quite working as intended).
   Since we have "old" SAS, we don't have the full class statementment with parameters (param=ref) and reference (ref=0) statements. */
 data model_quant;
 set analysis_medD;
@@ -505,7 +505,7 @@ length year_char $4.;
 		if density_cat = 0 then density_cat_reversed = 3;
 		if density_cat = 1 then density_cat_reversed = 2;
 		if density_cat = 2 then density_cat_reversed = 1;
-		if density_cat = 3 then density_cat_reversed = 0;
+		if density_cat = 3 then density_cat_reversed = 0 /*Rural*/;
 
 	year_char = '';
 		
@@ -525,6 +525,12 @@ proc format;
 value density_binary_reversed 
 			0= "Rural"
 			1= "Urban";
+
+value density_cat_reversed
+			0= "Rural"
+			1= "Hamlet (Small Town)"
+			2= "Micropolitan"
+			3= "Metropolitan";
 
 value $type_new
 
@@ -562,6 +568,27 @@ class density_binary_reversed type_new year_char;
 
 run;
 
+proc freq data=model_quant;tables density_cat_reversed density_cat /norow nocol nopercent nocum;format density_cat_reversed density_cat_reversed. density_cat density_cat.;run;
+
+proc quantreg data=model_quant;
+/*group by year
+by year_char;*/
+/*Class is our predictor*/
+class density_cat_reversed type_new year_char;
+    model rate = density_cat_reversed type_new year_char/ quantile= 0.05 to 0.95 by 0.05 plot=quantplot(density_cat_reversed);
+
+	*where abx_tot_clms ge (10) and year_var in (2023);
+
+	output out = predictionmodel_categorical p = predquant;
+	label density_cat_reversed = "Density:" type_new = "Specialty" year_char = "Year";
+
+		format density_cat_reversed density_cat_reversed. type_new $type_new.;
+
+run;
+
+
+
+
 /*Create visual for yearly predicted claim rate from model output for easier viewing*/
 proc sort data=predictionmodel_18 out=annual_plot;by year_char;run;
 
@@ -593,6 +620,7 @@ quit;
 
 ods graphics / noborder labelmax=3700;
 ods html style=HTMLBlue; 
+
 proc sgplot data = graphics_year;
 title;
 yaxis max=1000 label = "Predicted claim rate per 1,000 beneficiaries";
@@ -840,7 +868,7 @@ run;
 
 
 
-ods rtf text=  "Full Quantile Regression Model: ABX Claims per 1,000 Beneficiaries by specialty, population density, and year";
+ods rtf text=  "Full Quantile Regression Model: ABX Claims per 1,000 Beneficiaries by specialty, population density, and year (BINARY)";
 /*Full model, add and subtract from the class and model statements to look at different independent variables predicting rate.
   Use by statement to view by year*/
 proc quantreg data=model_quant;
@@ -859,6 +887,23 @@ class density_binary_reversed type_new year_char;
 
 run;
 
+
+ods rtf text=  "Full Quantile Regression Model: ABX Claims per 1,000 Beneficiaries by specialty, population density, and year (CATEGORICAL)";
+proc quantreg data=model_quant;
+/*group by year
+by year_char;*/
+/*Class is our predictor*/
+class density_cat_reversed type_new year_char;
+    model rate = density_cat_reversed type_new year_char/ quantile= 0.05 to 0.95 by 0.05 plot=quantplot(density_cat_reversed);
+
+	*where abx_tot_clms ge (10) and year_var in (2023);
+
+	output out = predictionmodel_categorical p = predquant;
+	label density_cat_reversed = "Density:" type_new = "Specialty" year_char = "Year";
+
+		format density_cat_reversed density_cat_reversed. type_new $type_new.;
+
+run;
 
 ods rtf close;
 
