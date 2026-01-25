@@ -1,0 +1,59 @@
+---
+title: "Quick Tables"
+author: "M Hoskins"
+date: "2025-01-24"
+output:
+  html_document: default
+  word_document: default
+  pdf_document: default
+---
+
+```{r setup, include=FALSE}
+knitr::opts_chunk$set(echo = TRUE)
+library(knitr)
+library(kableExtra)
+library(ggplot2)
+library(dplyr)
+library(tidyverse)
+
+source("External_eval_R_practice.R")
+```
+
+## R Markdown
+
+## Raw Tables 
+
+```{r tables}
+kable(cancer_type_tbl1) %>%
+  kable_styling(full_width = FALSE, bootstrap_options = "striped")
+
+kable(treatment_time_tbl2) %>%
+  kable_styling(full_width = FALSE, bootstrap_options = "striped")
+
+kable(summary_treatment_tbl3) %>%
+  kable_styling(full_width = FALSE, bootstrap_options = "striped")
+
+kable(summary_demo_tbl4) %>%
+  kable_styling(full_width = FALSE, bootstrap_options = "striped")
+```
+
+## A Few Plots
+
+```{r plots, fig.width=7, fig.height=5}
+diag_age_sex_box
+stage_age_sex_box
+diag_age_region
+age_diag_hist
+age_sex_hist
+normal_dist_agedays
+```
+
+## Appendix: Full R code
+
+```{r full_script, results='asis', echo=FALSE}
+# code
+script <- readLines("External_eval_R_practice.R")
+
+# Print 
+cat(paste0("```r\n", script, "\n```"), sep = "\n")
+
