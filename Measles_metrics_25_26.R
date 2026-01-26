@@ -18,24 +18,25 @@
 tinytex::install_tinytex(force = TRUE)
 
 # load libraries
-pacman::p_load(dplyr, rvest, lubridate, rio, skimr, sqldf, gtsummary, openxlsx, kableExtra, knitr)
+pacman::p_load(dplyr, tidyr, rvest, lubridate, rio, skimr, sqldf, gtsummary, openxlsx, ggplot2, kableExtra, knitr, biostats, tigris, stringr)
+
 
 # set working directory (if you haven't already) and output path
-setwd("WORKING DIRECTORY GOES HERE")
-contacttracing <- paste0("---OUTPUT PATHWAY GOES HERE---" , Sys.Date(), ".xlsx")
+setwd("C:/Data/Measles/Data")
+contacttracing <- paste0("C:/Data/Measles" , Sys.Date(), ".xlsx")
 
 
 # Read in data
     # Import from NCEDSS delete excess headers and save as CSV
 # reading in case info
-working_redcap <- read.csv( ".---PATHWAY AND FILE NAME GO HERE---.csv") # Update file name here 
+working_redcap <- read.csv( "./StatewideMeaslesResp_DATA_LABELS_2026-01-26_1552.csv") # Update file name here 
 
 
 
 # Confine to only what we need
 working_redcap_2 <- working_redcap |> 
     select(Record.ID, This.field.will.display..Yes..if.the.contact.answered.Yes.to.having.an.MMR.record, Is.the.contact.considered.immune., Is.contact.lost.to.follow.up.,
-           Calculate.most.recent.exposure.date, Quarantine.start.date, Calculated.quarantine.end.date, Specify.Response, Repeat.Instrument, Data.Access.Group, Is.quarantine.needed., Monitoring.Need, 
+           Calculate.most.recent.exposure.date, Quarantine.start.date, Calculated.quarantine.end.date.., Specify.Response, Repeat.Instrument, Data.Access.Group, Is.quarantine.needed., Monitoring.Need, 
            Call.outcome, Call.outcome.1, Call.outcome.2, Call.outcome.3, Call.outcome.4, Record.Status.., Complete., Date.of.interview) |> 
     
             filter(Repeat.Instrument %in% c(""))
@@ -60,14 +61,14 @@ working_redcap_2 <- working_redcap_2 |>
            specify_response = Specify.Response,
            calc_monitor_need = Monitoring.Need,
            record_status = Record.Status..,
-           quar_end = Calculated.quarantine.end.date,
+           quar_end = Calculated.quarantine.end.date..,
            status = Complete.,
            int_date = Date.of.interview)
 
 # Dates. ugh.
-working_redcap_2$calc_recent_exposure_date <- mdy(working_redcap_2$calc_recent_exposure_date)
-working_redcap_2$quar_end <- mdy(working_redcap_2$quar_end)
-working_redcap_2$int_date <- mdy(working_redcap_2$int_date)
+working_redcap_2$calc_recent_exposure_date <- ymd(working_redcap_2$calc_recent_exposure_date)
+working_redcap_2$quar_end <- ymd(working_redcap_2$quar_end)
+working_redcap_2$int_date <- ymd(working_redcap_2$int_date)
 
 # 
 # #        sniff test for variables if neccessary:
@@ -90,6 +91,8 @@ response_calcs <- working_redcap_2 |>
             specify_response == 'Rutherford County contact investigation January 8, 2026' ~ 'Rutherford',
             specify_response == 'Cabarrus County contact investigation January 8, 2026' ~ 'Cabarrus',
             specify_response == 'Polk County contact investigation December 31, 2025' ~ 'Polk',
+            specify_response == 'Mecklenburg County contact investigation January 22, 2026' ~ 'Mecklenburg',
+            
             Record.ID == '469' ~ 'Polk',
             Record.ID == '470' ~ 'Buncombe',
             TRUE ~ ''),
@@ -198,14 +201,83 @@ state_sumstats <- linelist_final |>
                      curr_active_mon ~ "Currently in active monitoring"))
 
 # print sum stats (column %'s)
-print(county_sumstats)
-print(state_sumstats)
+county_sumstats
+state_sumstats
 
 # Make a list for a single export
 combine_metrics <- list("linelist" = linelist_final, "county" = county_sumstats, "state" = state_sumstats)
 
-# send to Outputs folder 
-write.xlsx(x = combine_metrics, file = contacttracing)
+
+#Map:
+
+#Step 1: Count cases per county
+county_counts <- linelist_final |>
+    mutate(county = str_to_title(str_trim(Data.Access.Group))) |> 
+    count(county, name = "n_obs")
+
+# Had this in a prior map, don't know why, kept it.
+options(tigris_use_cache = TRUE)
+
+#Step 2: Get counties from TIGRIS package
+nc_counties <- counties(
+    state = "NC",
+    cb = TRUE,     
+    year = 2023) |>
+    mutate(
+    county = str_to_title(NAME))
+
+
+#Step 3: Merge and make NAs 0
+nc_map_data <- nc_counties |>
+    left_join(county_counts, by = "county") |> mutate(n_obs = replace_na(n_obs, 0))
+
+#Step 4: Heat map white for zero then darkish blue for highest counts. borders are black, text color is red
+county_heatmap <- ggplot(nc_map_data) + geom_sf(aes(fill = n_obs), color = "black", linewidth = 0.2) +
+  
+  geom_sf_text(
+    data = dplyr::filter(nc_map_data, n_obs > 0),
+    aes(label = n_obs),
+    color = "red",
+    size = 4.5,
+    fontface = "bold") +
+  
+  scale_fill_gradient(
+    low  = "white",
+    high = "#1f4e79",   # same matte blue you used earlier
+    name = "Contacts") +
+
+  theme_minimal() +
+  
+  theme(panel.grid = element_blank(),
+    axis.text = element_blank(),
+    axis.title = element_blank(),
+    legend.position = "none") + #No legend, we can add it back in but for now we just want to see the county breakdown
+  
+  labs(title = "Number of known exposed contacts by county",
+    subtitle = "North Carolina")
+
+#Print heatmap
+county_heatmap
+
+
+#Workaround, output not working, no idea how this works pulled it from stack and some data science website
+
+wb <- createWorkbook()
+
+# Sheet 1: linelist
+addWorksheet(wb, "linelist")
+writeData(wb, "linelist", combine_metrics$linelist)
+
+# Sheet 2: county metrics (extract table)
+addWorksheet(wb, "county")
+writeData(wb, "county", as_tibble(combine_metrics$county))
+
+# Sheet 3: state metrics (extract table)
+addWorksheet(wb, "state")
+writeData(wb, "state", as_tibble(combine_metrics$state))
+
+saveWorkbook(wb, contacttracing, overwrite = TRUE)
+
 
 # fin
 
@@ -218,5 +290,6 @@ write.xlsx(x = combine_metrics, file = contacttracing)
 # 
 # sumstats_freqs
 # 
+
 
 
