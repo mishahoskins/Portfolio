@@ -133,6 +133,7 @@ select
 	prscrbr_crdntls,
 	Prscrbr_St1,
 	Prscrbr_RUCA_Desc,
+	prscrbr_type,
 
 		case when prscrbr_type in ("Dentist") then "Dentist"
 	 	 when prscrbr_type in ("Internal Medicine") then "Internal Medicine"
@@ -145,8 +146,17 @@ select
 	else "" end as type_new
 
 from analysis.medD_2018_2023
+	/*optional year statement
+	where year_var in (2023)*/
 ;
 quit;
+
+proc freq data=medD_prep order=freq; tables prscrbr_type / norow nocol nopercent nocum; where type_new in ("Other");run;
+
+
+proc print data=medD_prep_1 noobs;run;
+proc print data=specialty_90 noobs;run;
+
 
 
 /*Creating two separate 90th percentile thresholds. First is for each year across ALL specialties. Second is by specialty aggregated from 2018-2023, so 90th percentile for Dentists using all ABX claims from 2018-2023 for example*/
@@ -169,7 +179,7 @@ run;
 
 proc univariate data=medD_prep noprint;
 	var abx_tot_clms;
-	by type_new;
+	by type_new; /*can add year_var in here too for type by year*/
 	output out=specialty_90 p90=p90 p10=p10 median=median mean=mean;
 		where abx_tot_clms ge (11);
 run;
@@ -178,7 +188,7 @@ run;
 proc print data=medD_prep_1 noobs;run;
 proc print data=specialty_90 noobs;run;
 
-
+/*Begin prepping tables*/
 
 proc sql;
 create table medD_prep_2 as
@@ -233,6 +243,28 @@ from specialty_90;
 quit;
 
 
+/*Analysis*/
+/*To replicate CDC analysis in NC, run a non-parametric wilcoxon rank sum*/
+
+proc npar1way data=medD_prep_2 wilcoxon plots(only)=(normalboxplot scores=data);
+title "Nonparametric test to compare median abx claims rate by provider level (high volume vs. not high volume)";
+	class p90_flag; /*yearly 90th percentile*/
+	var rate; /*Use the rate to account for some providers having many more patients ie. family practice more than dental surgery see Gouin et a. (2019)*/
+
+			where  abx_tot_clms ge (10);
+
+run;
+/*Do it again for specialty as our class (highest volume prescribers by year)*/
+proc npar1way data=medD_prep_2 wilcoxon plots(only)=(normalboxplot scores=data);
+title "Nonparametric test to compare median abx claims rate by provider level (high volume vs. not high volume)";
+	class p90_flag_spec;
+	var rate; /*Use the rate to account for some providers having many more patients ie. family practice more than dental surgery see Gouin et a. (2019)*/
+
+			where  abx_tot_clms ge (10);
+
+run;
+/*High volume prescriber prescribe a statistically higher rate of abx versus not-high volume prescribers.... shocker...*/
+
 proc sort data=medD_prep_2;
 	by  p90_flag_spec;
 
@@ -248,7 +280,7 @@ run;
 
 proc print data=medD_prep_3;run;
 
-/*Analysis*/
+
 
 
 /*Now we'll merge tables into one to have one table with ONLY what we want to depict*/
@@ -344,13 +376,24 @@ select
 
 from final_table_part_III
 ;
- 
+create table final_table_part_V as
+select
+	
+	p90_flag_spec '90th %-tile among Specialty 1=Yes',
+	mean 'Mean Prescription Rate' format 10.1, 
+	median 'Median Prescription Rate' format 10.1, 
+	Q1 'Lower Quartile Prescription Rate' format 10.1, 
+	Q3  'Upper Quartile Prescription Rate' format 10.1
+
+from medD_prep_3; 
 quit;
+
+
 
 proc print data=final_table_part_IV noobs label;run;
 proc print data=final_table_part_II noobs label;run;
 
-proc print data=medD_prep_3;run;
+proc print data=final_table_part_V noobs label;run;
 
 
 
@@ -384,6 +427,28 @@ from medD_prep_2
 	group by NPI
 ;
 quit;
+
+
+
+
+
+/*Save to SAS datasets and tables folder*/
+data analysis.analysis_medD_2023;
+	set analysis_medD;
+run;
+
+data analysis.final_table_part_IV;
+	set final_table_part_IV;
+run;
+
+data analysis.final_table_part_II;
+	set final_table_part_II;
+run;
+
+data analysis.final_table_part_V;
+	set final_table_part_V;
+run;
+
 
 
 /*Univariate to look at normality (it's not)*/
@@ -421,17 +486,29 @@ at less urban groups compared to each other. For ex: micropolitan specialties (g
 categorized specialties (group 2). However, group 1 is more likely to be a high presciber as compared to their rural (group 3) counterparts.*/
 
 
-proc logistic data=analysis_medD plots(only)=(oddsratio(range=0.5, 2.58)); /*plotting OR each density compared to others*/
+proc logistic data=analysis_medD plots(only)=(oddsratio(range=0.5, 2.75)); /*plotting OR each density compared to others*/
 	class p90_flag_spec (param=ref ref='0') density_cat (param=ref ref='Metropolitan') type_new (param=ref ref='Family Practice');
 	/*multivariate model using both density and specialty type*/
 	model p90_flag_spec = density_cat type_new/ noor parmlabel;/*no ODDS ratio (noor) to simplyfy output we don't need this OR, we want the comprehensive one next*/
 /*Display all comparisons of ORs*/
 	oddsratio density_cat;
-where abx_tot_clms ge (10);
+		where abx_tot_clms ge (10);
 		format density_cat density_cat.;
 
 run;
 
+
+
+proc logistic data=analysis_medD plots(only)=(oddsratio(range=0.5, 2.5)); /*plotting OR each type compared to internal medicine*/
+	class p90_flag_spec (param=ref ref='0') type_new (param=ref ref='Internal Medicine');
+	/*univariate model using  specialty type*/
+	model p90_flag_spec = type_new/ parmlabel;/*no ODDS ratio (noor) to simplyfy output we don't need this OR, we want the comprehensive one next*/
+/*Display all comparisons of ORs
+	oddsratio type_new;*/
+		where abx_tot_clms ge (10);
+		format density_cat density_cat.;
+
+run;
 
 /*ANOVA: independent still density category, but dependent is # of abx. (can try claim rate too) ANOVA takes each group (density categories) and compares the mean of each outcome (abx perscriptions), are they more different than we would expect? 
 		I.e.: are we seeing higher mean abx prescrbiing practices in more rural(small town, micro etc.) as compared to their metropolitan counterparts (reference group)? F-statistic, pull those textbooks out and brush off
@@ -480,10 +557,11 @@ title "Nonparametric test to compare median abx claims rate by provider and popu
 run;
 
 
-
+/*For quantile regression in SAS we need to reverse our groups. Quantreg as a procedure takes the highest category and uses it as a reference (not entirely true we can format, and order=formatted but initially it wasn't quite working as intended).
+  Since we have "old" SAS, we don't have the full class statementment with parameters (param=ref) and reference (ref=0) statements. */
 data model_quant;
 set analysis_medD;
-
+length year_char $4.;
     density_binary_reversed = 1 - density_binary;
 
 	density_cat_reversed = .;
@@ -491,18 +569,32 @@ set analysis_medD;
 		if density_cat = 0 then density_cat_reversed = 3;
 		if density_cat = 1 then density_cat_reversed = 2;
 		if density_cat = 2 then density_cat_reversed = 1;
-		if density_cat = 3 then density_cat_reversed = 0;
+		if density_cat = 3 then density_cat_reversed = 0 /*Rural*/;
 
+	year_char = '';
+		
+		if year_var = 2018 then year_char = "2018";
+		if year_var = 2019 then year_char = "2019";
+		if year_var = 2020 then year_char = "2020";
+		if year_var = 2021 then year_char = "2021";
+		if year_var = 2022 then year_char = "2022";
+		if year_var = 2023 then year_char = "2023";
 run;
 
-
-proc freq data=model_quant; tables density_cat density_cat_reversed/ norow nocol nopercent nocum;run;
+/*Check to make sure your "new" reveresed variables are the same as the old but in the opposite order or character*/
+proc freq data=model_quant; tables density_cat density_cat_reversed year_char/ norow nocol nopercent nocum;run;
 
 proc format;
 
 value density_binary_reversed 
 			0= "Rural"
 			1= "Urban";
+
+value density_cat_reversed
+			0= "Rural"
+			1= "Hamlet (Small Town)"
+			2= "Micropolitan"
+			3= "Metropolitan";
 
 value $type_new
 
@@ -514,255 +606,105 @@ value $type_new
 		"Physician Assistant" = "6. PA" 
 		"Urology" =  "5. Uro"
 ;
-		
 
 run;
+/*Save to folder for R viz*/
 
+data analysis.medD_prep_3;
+	set medD_prep_3;
+run;
 
 dm 'odsresults;clear';
 /*perform quantile regression in a few ways. First plot shows rate by quantile. Each subsequent plot shows the rate diff on the y axis from the first plot and how it changes over quantiles.*/
-ods html style=journal;  
+ods html style=journal; 
+title;
+proc sort data=model_quant;by year_char;run;
+/*Full model, add and subtract from the class and model statements to look at different independent variables predicting rate.
+  Use by statement to view by year*/
 proc quantreg data=model_quant;
-class density_binary_reversed type_new;
-    model rate = density_binary_reversed type_new/ quantile= 0.05 to 0.95 by 0.05 plot=quantplot(density_binary_reversed);
+/*group by year
+by year_char;*/
+/*Class is our predictor*/
+class density_binary_reversed type_new year_char;
+    model rate = density_binary_reversed type_new year_char/ quantile= 0.05 to 0.95 by 0.05 plot=quantplot(density_binary_reversed);
 
-	where abx_tot_clms ge (10);
+	*where abx_tot_clms ge (10) and year_var in (2023);
 
-	output out = predictionmodel p = predquant;
-	label density_binary_reversed = "Density:" type_new = "Specialty";
+	output out = predictionmodel_binary p = predquant;
+	label density_binary_reversed = "Density:" type_new = "Specialty" year_char = "Year";
 
 		format density_binary_reversed density_binary_reversed. type_new $type_new.;
-		
 
 run;
 
 
+proc quantreg data=model_quant;
+/*group by year
+by year_char;*/
+/*Class is our predictor*/
+class density_cat_reversed type_new year_char;
+    model rate = density_cat_reversed type_new year_char/ quantile= 0.05 to 0.95 by 0.05 plot=quantplot(density_cat_reversed);
 
+	*where abx_tot_clms ge (10) and year_var in (2023);
 
+	output out = predictionmodel_categorical p = predquant;
+	label density_cat_reversed = "Density:" type_new = "Specialty" year_char = "Year";
 
-proc format;
-    value densityfmt
-        0 = "Metropolitan"
-        1 = "Micropolitan"
-        2 = "Small Town"
-		3 = "Rural";
-
-
-run;
-
-title;footnote;
-ods graphics noborder;
-/*Plot by density and abx count only (right skew: median < mean)*/
-proc sgplot data=model_quant noborder;
-title height=10pt "Antibiotic prescribing rate and IQR by specialty type, North Carolina 2018-2023";
-    vbox rate / category=type_new nooutliers
-        fillattrs=(color=lightgray) 
-        meanattrs=(symbol=circlefilled color=black size=8)
-		medianattrs=(color=black pattern=dash thickness=2)
-        whiskerattrs=(thickness=1 color=black)
-			displaystats=(median mean) ;
-
-    xaxis label="Specialty" valueattrs= (family="Arial" size=8)
-		labelattrs= (family="Arial" weight=bold size=8);
-
-
-    yaxis min=0 max=2000 label="Antibiotic Prescription Rate per 1,000 Beneficiaries" valueattrs= (family="Arial" size=8)
-		labelattrs= (family="Arial" weight=bold size=8);
-
-    format density_cat densityfmt. density_binary_reversed density_binary_reversed.;
-
-		where abx_tot_clms ge (10);
-
-
-run;
-title;
-/*Plot and group by specialty type*/
-proc sgplot data=analysis_medD noborder;
-    vbox rate / category=density_cat group=type_new nooutliers
-        /*fillattrs=(color=CX80B1D3) */
-        meanattrs=(symbol=circlefilled color=red size=8)
-		medianattrs=(color=red)
-        whiskerattrs=(thickness=1 color=black);
-
-    xaxis label="Population Density Category" valueattrs= (family="Arial" size=8)
-		labelattrs= (family="Arial" weight=bold size=8);
-
-
-    yaxis min=0 max=2000 label="Antibiotic Prescription Rate per 1,000 Patients" valueattrs= (family="Arial" size=8)
-		labelattrs= (family="Arial" weight=bold size=8);
-
-
-	format density_cat densityfmt.;
-		keylegend / title="Specialty Type" location=outside position=bottom noborder titleattrs= (family="Arial" size=8 weight=bold) valueattrs= (family="Arial" size=8);
-
-		where abx_tot_clms ge (10);
-run;
-
-
-
-
-/*clear all your other terrible results*/
-dm 'odsresults; clear';
-
-ods graphics /noborder;
-title; footnote;
-
-/*Set your output pathway here*/ 
-
-ods rtf file="&outpath.Medicare_ptD_tables_&sysdate..rtf" 
-/*Named a generic overwriteable name so we can continue to reproduce and autopopulate a template;
-style=journal */startpage=never;
-
-options number nodate;
-
-
-ods rtf text= "Antibiotic Prescribing Claims by Volume, North Carolina 2018-2023";
-proc print data=final_table_part_IV noobs label 
-/*General styling to fit a portrait orientation*/
-style(table)=[cellpadding=4 cellspacing=0 borderwidth=0 frame=void rules=none width=100%];
-
-var hi_volume pct_hi_vol Hnum_abx pct_hi_presc Hmed_claims lo_volume pct_lo_vol Lnum_abx pct_lo_presc Lmed_claims all_volume all_num_abx all_med_claims   
-    / 
-/*Specific "table 1" styling*/
-    /* Header: top and bottom borders only */
-    style(header)=[
-        font_weight=bold 
-        backgroundcolor=white 
-        just=center 
-        borderbottomcolor=black borderbottomwidth=1 
-        bordertopcolor=black bordertopwidth=1 
-        borderleftwidth=0 borderrightwidth=0]
-
-    /* Data: center everything, don't bold anything but headers*/
-    style(data)=[
-        just=center 
-        fontsize=9pt 
-        bordercolor=white borderwidth=0];
-
-
-run;
-title;
-
-ods rtf text= "Antibiotic Prescribing Claims by Volume, North Carolina 2018-2023";
-proc print data=final_table_part_II noobs label 
-/*General styling to fit a portrait orientation*/
-style(table)=[cellpadding=4 cellspacing=0 borderwidth=0 frame=void rules=none width=100%];
-
-var type_new hi_volume pct_hi_vol Hnum_abx pct_hi_presc Hmed_claims lo_volume pct_lo_vol Lnum_abx pct_lo_presc Lmed_claims all_volume all_num_abx all_med_claims 
-    / 
-/*Specific "table 1" styling*/
-    /* Header: top and bottom borders only */
-    style(header)=[
-        font_weight=bold 
-        backgroundcolor=white 
-        just=center 
-        borderbottomcolor=black borderbottomwidth=1 
-        bordertopcolor=black bordertopwidth=1 
-        borderleftwidth=0 borderrightwidth=0]
-
-    /* Data: center everything, don't bold anything but headers*/
-    style(data)=[
-        just=center 
-        fontsize=9pt 
-        bordercolor=white borderwidth=0];
-
-
-run;
-title;
-
-
-
-
-ods rtf text=  "Analysis 1: Odds Ratio, high prescriber likelihood by density accounting for specialty";
-proc format;
-    value density_cat
-        0 = 'Metropolitan'
-        1 = 'Micropolitan'
-        2 = 'Small Town'
-        3 = 'Rural';
-
+		format density_cat_reversed density_cat_reversed. type_new $type_new.;
 
 run;
 
 
-proc logistic data=analysis_medD plots(only)=(oddsratio(range=0.5, 2.58)); /*plotting OR each density compared to others*/
-	class p90_flag_spec (param=ref ref='0') density_cat (param=ref ref='Metropolitan') type_new (param=ref ref='Family Practice');
-	/*multivariate model using both density and specialty type*/
-	model p90_flag_spec = density_cat type_new/ noor parmlabel;/*no ODDS ratio (noor) to simplyfy output we don't need this OR, we want the comprehensive one next*/
-/*Display all comparisons of ORs*/
-	oddsratio density_cat;
-where abx_tot_clms ge (10);
-		format density_cat density_cat.;
+proc print data=predictionmodel_binary (obs=100);run;
+
+/*Create visual for yearly predicted claim rate from model output for easier viewing*/
+proc sort data=predictionmodel_binary out=annual_plot;by year_char;run;
+
+proc sql;
+create table graphics_year as
+select
+
+	year_char,
+	median(predquant1) as med_05,
+	median(predquant2) as med_10,
+	median(predquant4) as med_25,
+	median(predquant10) as med_50,
+	median(predquant15) as med_75,
+	median(predquant18) as med_90,
+	median(predquant19) as med_95
+
+
+
+from annual_plot
+	where density_binary in (1) and type_new not in ('Internal Medicine') /*exclude our two reference groups*/
+
+	group by year_char
+
+
+;
+
+quit;
+
+proc contents data=predictionmodel_binary order=varnum;run;
+
+
+ods graphics / noborder labelmax=3700;
+ods html style=HTMLBlue; 
+
+proc sgplot data = graphics_year noborder;
+title "Predicitve model expected rate of antibiotic prescriptions among non-reference group (non-rural, non internal medicine) providers";
+yaxis max=1000 label = "Predicted claim rate per 1,000 beneficiaries";
+
+	series x = year_char y = med_05 / curvelabel = '5 %tile';
+	*series x = year_char y = med_10/curvelabel = '10 %tile';
+	series x = year_char y = med_25 / curvelabel = '25 %tile';
+	series x = year_char y = med_50 / curvelabel = '50 %tile';
+	series x = year_char y = med_75 / curvelabel = '75 %tile';
+	series x = year_char y = med_90 / curvelabel = '90 %tile' datalabel;
+	series x = year_char y = med_95 / curvelabel = '95 %tile' datalabel;
 
 run;
 
 
-ods rtf text=  "Analysis 2: Wilcoxon rank sum, mean/median distribution by density and specialty";
+/*So this is cool, but we want to extrapolate across future years*/
 
-proc npar1way data=analysis_medD wilcoxon plots(only)=(median scores=databoxplot);
-title "Nonparametric test to compare median abx claims rate by provider and population density of provider location";
-	class density_cat;
-	var rate; /*Use the rate to account for some providers having many more patients ie. family practice more than dental surgery see Gouin et a. (2019)*/
-	
-			where p90_flag_spec not in (1) and abx_tot_clms ge (10);
-
-			format density_cat density_cat.;
-
-run;
-
-title;footnote;
-/*Plot by density and abx count only (right skew: median < mean)*/
-
-proc sgplot data=analysis_medD noborder;
-    vbox rate / category=density_cat nooutliers
-        fillattrs=(color=lightgray) 
-        meanattrs=(symbol=circlefilled color=black size=8)
-		medianattrs=(color=black pattern=dash thickness=2)
-        whiskerattrs=(thickness=1 color=black)
-		;*	displaystats=(median mean) ;
-
-    xaxis label="Population Density Category" valueattrs= (family="Arial" size=8)
-		labelattrs= (family="Arial" weight=bold size=8);
-
-
-    yaxis min=0 max=1500 label="Antibiotic Prescription Rate per 1,000 Beneficiaries" valueattrs= (family="Arial" size=8)
-		labelattrs= (family="Arial" weight=bold size=8);
-
-    format density_cat densityfmt.;
-
-		where abx_tot_clms ge (10);
-
-
-run;
-
-
-/*Plot and group by specialty type*/
-proc sgplot data=analysis_medD noborder;
-    vbox rate / category=density_cat group=type_new nooutliers
-        /*fillattrs=(color=CX80B1D3) */
-        meanattrs=(symbol=circlefilled color=red size=8)
-		medianattrs=(color=red)
-        whiskerattrs=(thickness=1 color=black);
-
-    xaxis label="Population Density Category" valueattrs= (family="Arial" size=8)
-		labelattrs= (family="Arial" weight=bold size=8);
-
-
-    yaxis min=0 max=2000 label="Antibiotic Prescription Rate per 1,000 Beneficiaries" valueattrs= (family="Arial" size=8)
-		labelattrs= (family="Arial" weight=bold size=8);
-
-
-	format density_cat densityfmt.;
-		keylegend / title="Specialty Type" location=outside position=bottom noborder titleattrs= (family="Arial" size=8 weight=bold) valueattrs= (family="Arial" size=8);
-
-		where abx_tot_clms ge (10);
-run;
-
-
-ods rtf close;
-
-
-
-
-
-title;
