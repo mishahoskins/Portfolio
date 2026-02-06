@@ -1,7 +1,7 @@
 # Program Name:  External_eval_R_practice
 # Author:        Mikhail Hoskins
 # Date Created:  12/19/2025
-# Date Modified: 01/24/2026 <- installed pacman begin tidyverse translastion for portfolio
+# Date Modified: 02/02/2026 Added SQL Server connection and data import from server.
 # Description:   Four tables of basic information from three joined tables. A few plots because those help me understand the data. 
 #
 # Inputs:       Patient_Demographics.csv , Patient_Diagnosis_(2).csv , Patient_Treatment_(2).csv
@@ -25,16 +25,33 @@
 # library(dplyr)
 # library(tidyverse)
 # library(kableExtra)
-# install.packages("pacman")                                                                   
+# install.packages("pacman")                     
+# install.packages("rlang")
+# install.packages("vctrs")     
+# 
+# 
+remove.packages("rlang")
+install.packages("rlang")                                                     
                                                                                     
-                                                                                    
-pacman::p_load(dplyr, rvest, lubridate, rio, tidyverse, skimr, sqldf, gtsummary, openxlsx, kableExtra, knitr)
-                                                                                    
+pacman::p_load(dplyr, rvest, ggplot2, tidyr, lubridate, rio, tidyverse, skimr, sqldf, gtsummary, openxlsx, kableExtra, knitr, naniar, rlang, vctrs, biostats, readr, DBI, tools, odbc)
 
-#Bring in data
-pt_demo <- read.csv("C:\\Data\\Skills Test\\Data\\Patient_Demographics.csv")
-pt_diag <- read.csv("C:\\Data\\Skills Test\\Data\\Patient_Diagnosis_(2).csv")
-pt_treat <- read.csv("C:\\Data\\Skills Test\\Data\\Patient_Treatment_(2).csv")
+con <- DBI::dbConnect(
+  odbc::odbc(),
+  Driver = "ODBC Driver 17 for SQL Server",
+  Server = "LAPTOP-PTVDVGSP\\SQL2025",
+  Database = "Projects_Database",
+  Trusted_Connection = "Yes"
+)
+
+    # Import the three patient tables from SQL Server
+pt_demo <- dbReadTable(con, "Patient_Demographics")
+pt_diag <- dbReadTable(con, "Patient_Diagnosis_(2)")
+pt_treat <- dbReadTable(con, "Patient_Treatment_(2)")                                                                                
+
+#Bring in data -  moved to server 2/2/26
+# pt_demo <- read.csv("C:\\Data\\Skills Test\\Data\\Patient_Demographics.csv")
+# pt_diag <- read.csv("C:\\Data\\Skills Test\\Data\\Patient_Diagnosis_(2).csv")
+# pt_treat <- read.csv("C:\\Data\\Skills Test\\Data\\Patient_Treatment_(2).csv")
 
 #Basic SQL syntax that we'll follow throughout: 
 #table_name <- sqldf(""
@@ -42,12 +59,47 @@ pt_treat <- read.csv("C:\\Data\\Skills Test\\Data\\Patient_Treatment_(2).csv")
     #stuff goes here select, col names, from group by, left/right/full join on etc.(in between quotes)
   
 #)#end note
-
 #Tidyverse for reasons:
 Rspecific_join_all <- pt_demo |>
       left_join(pt_diag, by = "patient_id", relationship = "many-to-many") |>
       left_join(pt_treat, by = "patient_id", relationship = "many-to-many")
 
+
+
+# Calculate missingness by column
+missing_summary <- Rspecific_join_all |>
+  summarise(across(everything(), 
+                   list(n_missing = ~sum(is.na(.)),
+                        pct_missing = ~round(mean(is.na(.)) * 100, 2)))) |>
+  pivot_longer(everything(),
+               names_to = c("variable", ".value"),
+               names_sep = "_(?=n_missing|pct_missing)") |>
+  arrange(desc(pct_missing))
+
+missing_summary
+
+# Reshape data for heatmap
+miss_data <- Rspecific_join_all |>
+  mutate(row_id = row_number()) |>
+  mutate(across(everything(), as.character)) |>  # Convert all columns to character
+  pivot_longer(-row_id, names_to = "variable", values_to = "value") |>
+  mutate(missing = is.na(value))
+
+# Heatmap
+ggplot(miss_data, aes(x = variable, y = row_id, fill = missing)) +
+  geom_raster() +
+  scale_fill_manual(values = c("TRUE" = "#E74C3C", "FALSE" = "#34495E"),
+                    labels = c("Present", "Missing")) +
+  theme_minimal() +
+  theme(axis.text.x = element_text(angle = 45, hjust = 1)) +
+  labs(title = "Missingness Pattern", x = "Variable", y = "Row", fill = "")
+
+# Bar chart of missingness by variable
+ggplot(missing_summary, aes(x = reorder(variable, -pct_missing), y = pct_missing)) +
+  geom_col(fill = "#3498DB") +
+  coord_flip() +
+  labs(title = "Percentage Missing by Variable", 
+       x = "Variable", y = "% Missing")
 
 #Join them all on pt. ID
 #Join all data, we may or may not use this but having a patient ID level denormalized table is never bad.
