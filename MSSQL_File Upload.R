@@ -7,8 +7,8 @@ library(DBI)
 
 
 pacman::p_load(readr, DBI, tools, odbc)
-#Check drivers shows a list of your drivers
-sort(unique(odbcListDrivers() [[1]])) #View drivers
+
+sort(unique(odbcListDrivers() [[1]])) #View sql drivers
 
 #Connect
 
@@ -33,7 +33,7 @@ files <- list.files(
 length(files)
 head(files)
 
-for (f in files) {          # ← opening { for the loop
+for (f in files) {          
   
   tbl <- tools::file_path_sans_ext(basename(f))
   tbl <- gsub("[^A-Za-z0-9_]", "_", tbl)
@@ -55,6 +55,7 @@ for (f in files) {          # ← opening { for the loop
   }             
   
 }  
+
 
 
 
