@@ -20,20 +20,34 @@
 #               v.  Personal preference (this may be the disqualifying part but SQL is just so intuitive to me).
 #
 #               Annotations are at # (between /* in SAS) to help guide.
+
 from pathlib import Path
 from statistics import median
-
+import matplotlib.pyplot as plt
+import seaborn as sns
 import pandas as pd
-import pyodbc
-#Running SQL locally
+from sqlalchemy import create_engine
 from pandasql import sqldf
+
+#Running SQL locally
+
 pysqldf = lambda q: sqldf(q, globals())
+# Connect to server and pull in data
 
 
+# Create connection to SQL Server
+engine = create_engine(
+    'mssql+pyodbc://LAPTOP-PTVDVGSP\\SQL2025/Projects_Database'
+    '?driver=ODBC+Driver+17+for+SQL+Server'
+    '&trusted_connection=yes'
+)
 
-#Run Duck DB SQL
-import duckdb
-con = duckdb.connect("C:\\Data\\Skills Test\\Code\\Python\\duckdb\\epi_pipeline.duckdb")
+# Extract the three tables you uploaded
+pt_demo = pd.read_sql('SELECT * FROM dbo.Patient_Demographics', engine)
+pt_diag = pd.read_sql('SELECT * FROM dbo.Patient_Diagnosis__2_', engine)
+pt_treat = pd.read_sql('SELECT * FROM dbo.Patient_Treatment__2_', engine)
+
+
 #GIT
 from git import Repo
 # URL
@@ -42,19 +56,6 @@ remote_url = "https://github.com/mishahoskins/Portfolio.git"
 
 #Set filepath (kind of like a macro in SAS)
 filepath = Path("C:\\Data\\Skills Test\\Data")
-
-# Load the CSV file into a DataFrame
-pt_demo = pd.read_csv(filepath / "Patient_Demographics.csv")
-pt_diag = pd.read_csv(filepath / "Patient_Diagnosis_(2).csv")
-pt_treat = pd.read_csv(filepath / "Patient_Treatment_(2).csv")
-
-#Load into DuckDB
-con.register("pt_demo", pt_demo)
-con.register("pt_diag", pt_diag)
-con.register("pt_treat", pt_treat)
-#Date/time check for sanity if necessary
-# dataframename[['date_1', 'date_2', 'date_n']].dtypes
-
 
 joined_pt_info = pysqldf("""
     select 
@@ -66,12 +67,6 @@ joined_pt_info = pysqldf("""
 			   left join pt_treat c on a.patient_id = c.patient_id
 """)
 print(joined_pt_info)
-#Load in DuckDB and fix dates
-
-joined_pt_info['diagnosis_date']  = pd.to_datetime(joined_pt_info['diagnosis_date'],format='%m/%d/%y', errors='coerce')
-joined_pt_info['treatment_date'] = pd.to_datetime(joined_pt_info['treatment_date'],format='%m/%d/%y', errors='coerce')
-
-con.register("joined_pt_info",joined_pt_info)
 
 # Because we're in Python using native-ish SQL, we don't need to reformat dates like we do in SAS or even R
 #Table 1| Proportion and count of cancer type
@@ -103,48 +98,47 @@ cancer_type_tbl1 = pysqldf("""
     from pt_diag
         group by patient_id))
 	""")
-
+# Convert to percentage for easier interpretation. This is a personal preference, but I find it easier to interpret proportions in this way. SQL all the way until the very end then 
+# a quick format.
+cancer_type_tbl1[['prop_bc_only', 'prop_cc_only', 'prop_both']] = \
+    cancer_type_tbl1[['prop_bc_only', 'prop_cc_only', 'prop_both']] * 100
 #Table 1 Final
-print(cancer_type_tbl1)
+print (cancer_type_tbl1)
 
 
 #Table 2| Time to treatment
 #__________________________
 # DATEDIFF(day, diagnosis_date, treatment_date) AS days_between
-
+# Run your first query as-is to get the dates
 time_to_treat = pysqldf("""   
    select 
         patient_id,
-	    diagnosis,
-	    diagnosis_date,
-	    drug_code,
-
-	    case when diagnosis in ('Breast Cancer') then  min(diagnosis_date) else NULL end as first_diag_bc,
-	    case when diagnosis in ('Breast Cancer') then min(treatment_date) else NULL end  as first_treat_bc,
-	    case when diagnosis in ('Colon Cancer') then min(diagnosis_date) else NULL end as first_diag_cc,
-	    case when diagnosis in ('Colon Cancer') then min(treatment_date) else NULL end  as first_treat_cc
-
+        diagnosis,
+        case when diagnosis in ('Breast Cancer') then min(diagnosis_date) else NULL end as first_diag_bc,
+        case when diagnosis in ('Breast Cancer') then min(treatment_date) else NULL end  as first_treat_bc,
+        case when diagnosis in ('Colon Cancer') then min(diagnosis_date) else NULL end as first_diag_cc,
+        case when diagnosis in ('Colon Cancer') then min(treatment_date) else NULL end  as first_treat_cc
             from joined_pt_info
-        	group by patient_id""")
+            group by patient_id""")
 
-time_to_treat_2 = pysqldf(""" 
-    select
-        patient_id,
-	    diagnosis,
-	    first_diag_bc,
-	    first_treat_bc,
-	    first_diag_cc,
-	    first_treat_cc,
-        
-        julianday (first_treat_bc) - julianday (first_diag_bc) as time2treat_bc,
-        julianday (first_treat_cc) - julianday (first_diag_cc) as time2treat_cc
-        
-            from time_to_treat""")
+# Convert to datetime in pandas
+time_to_treat['first_diag_bc'] = pd.to_datetime(time_to_treat['first_diag_bc'])
+time_to_treat['first_treat_bc'] = pd.to_datetime(time_to_treat['first_treat_bc'])
+time_to_treat['first_diag_cc'] = pd.to_datetime(time_to_treat['first_diag_cc'])
+time_to_treat['first_treat_cc'] = pd.to_datetime(time_to_treat['first_treat_cc'])
 
+# Calculate differences in days
+time_to_treat['time2treat_bc'] = (time_to_treat['first_treat_bc'] - time_to_treat['first_diag_bc']).dt.days
+time_to_treat['time2treat_cc'] = (time_to_treat['first_treat_cc'] - time_to_treat['first_diag_cc']).dt.days
 #Python doesn't have a median in their SQL for some insane reason so we'll use Pandas
-print(time_to_treat_2)
-print(time_to_treat_2 [["time2treat_bc", "time2treat_cc"]].describe())
+# Summary statistics for time to treatment
+summary_time_to_treat = time_to_treat[['time2treat_bc', 'time2treat_cc']].agg(['median', 'min', 'max', 'std'])
 
+# Transpose for better readability (cancer types as rows)
+summary_time_to_treat = summary_time_to_treat.T
+summary_time_to_treat.index = ['Breast Cancer', 'Colon Cancer']
+
+summary_time_to_treat
 
 
 
@@ -228,3 +222,57 @@ summary_treatment_tbl3 = pysqldf("""
         
         from re_join_flag_2
         group by diagnosis_new""")
+
+
+# Reshape data for better display
+summary_long = summary_treatment_tbl3.melt(
+    id_vars='cancer_diagnosis',
+    var_name='treatment_combination',
+    value_name='count'
+)
+
+# Filter out zero counts for cleaner display
+summary_long = summary_long[summary_long['count'] > 0]
+
+# Pivot for a nice cross-tab view
+summary_pivot = summary_long.pivot(
+    index='cancer_diagnosis',
+    columns='treatment_combination',
+    values='count'
+).fillna(0).astype(int)
+
+summary_pivot
+
+
+#Outputs:
+#table 1: cancer_type_tbl1
+cancer_type_tbl1
+
+
+#table 2: time to treatment summary
+summary_time_to_treat
+
+#table 3: treatment combinations by cancer type
+summary_pivot
+
+#table 3: visualization of treatment combinations by cancer type
+# Create a bar chart
+plt.figure(figsize=(12, 6))
+summary_long_filtered = summary_long[summary_long['count'] > 0]
+
+sns.barplot(
+    data=summary_long_filtered,
+    x='treatment_combination',
+    y='count',
+    hue='cancer_diagnosis',
+    palette='Set2'
+)
+
+plt.title('First-Line Treatment Combinations by Cancer Type')
+plt.xlabel('Treatment Combination')
+plt.ylabel('Number of Patients')
+plt.legend(title='Cancer Diagnosis', bbox_to_anchor=(1.05, 1), loc='upper left')
+plt.xticks(rotation=45)
+plt.tight_layout()
+plt.show()
+
