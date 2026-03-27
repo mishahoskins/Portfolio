@@ -48,12 +48,6 @@ pt_diag = pd.read_sql('SELECT * FROM dbo.Patient_Diagnosis__2_', engine)
 pt_treat = pd.read_sql('SELECT * FROM dbo.Patient_Treatment__2_', engine)
 
 
-#GIT
-from git import Repo
-# URL
-repo = Repo('C:\\Data\\FlatIron Skills Test\\Code\\Python')
-remote_url = "https://github.com/mishahoskins/Portfolio.git"
-
 #Set filepath (kind of like a macro in SAS)
 filepath = Path("C:\\Data\\Skills Test\\Data")
 
